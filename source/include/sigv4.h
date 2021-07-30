@@ -150,7 +150,15 @@ typedef enum SigV4Status
      * Functions that may return this value:
      * - #SigV4_AwsIotDateToIso8601
      */
-    SigV4ISOFormattingError
+    SigV4ISOFormattingError,
+
+    /**
+     * @brief An error occurred while parsing the URI.
+     *
+     * Functions that may return this value:
+     * - #SigV4_GenerateHTTPAuthorization
+     */
+    SigV4UriParsingError
 } SigV4Status_t;
 
 /**
@@ -275,13 +283,13 @@ typedef struct SigV4HttpParameters
 typedef struct SigV4Credentials
 {
     /**
-     * @brief The pAccessKeyId MUST be 20 characters long.
+     * @brief The pAccessKeyId MUST be at least 16 characters long.
      */
     const char * pAccessKeyId;
     size_t accessKeyLen; /**< @brief Length of pAccessKeyId. */
 
     /**
-     * @brief The pSecretAccessKey MUST be 40 characters long.
+     * @brief The pSecretAccessKey MUST be at least 40 characters long.
      */
     const char * pSecretAccessKey;
     size_t secretAccessKeyLen; /**< @brief Length of pSecretAccessKey. */
@@ -424,4 +432,22 @@ SigV4Status_t SigV4_AwsIotDateToIso8601( const char * pDate,
                                          char * pDateISO8601,
                                          size_t dateISO8601Len );
 /* @[declare_sigV4_awsIotDateToIso8601_function] */
+
+/**
+ * Generates the HTTP Authorization header value. 
+ *
+ * @param[in] pParams Parameters for generating the Sigv4 signature.
+ * @param[out] pAuthBuf Buffer for outputting the Authorization header
+ * value.
+ * @param[in, out] authBufLen the length of pAuthBuf, output the length 
+ * of authorization written to the buffer.
+ * @param[out] pSignature Location of the signature in the authorization stirng.
+ * @param[out] signatureLen The length of pSignature.
+ * @return SUCCESS code if successful, error code otherwise.
+ */
+sigv4ReturnCode_t Sigv4_GenerateHTTPAuthorization( const SigV4Parameters_t * pParams,
+                                                  char* pAuthBuf,
+                                                  size_t* authBufLen
+                                                  char** pSignature,
+                                                  size_t * signatureLen );
 #endif /* SIGV4_H_ */

@@ -122,8 +122,8 @@
  * a value greater than 0 if @pSecondVal < @pFirstVal. 0 is never returned in
  * order to provide stability to qSort() calls.
  */
-    static int cmpKeyValue( const void * pFirstVal,
-                            const void * pSecondVal );
+    static int cmpKey( const void * pFirstVal,
+                       const void * pSecondVal );
 
 #endif /* #if (SIGV4_USE_CANONICAL_SUPPORT == 1) */
 
@@ -142,17 +142,18 @@ static void intToAscii( int32_t value,
                         size_t bufferLen );
 
 /**
- * @brief Format the credential scope of the authorization header using the date, region, and service
- * parameters found in #SigV4Parameters_t.
+ * @brief Format the credential scope of the authorization header using the access key ID,
+ * date, region, and service parameters found in #SigV4Parameters_t and ends with the
+ * "aws4_request" terminator.
  *
  * @param[in] pSigV4Params The application parameters defining the credential's scope.
  * @param[in, out] pCredScope The credential scope in the V4 required format.
  *
- * @return SigV4ISOFormattingError if a snprintf() error was encountered,
- * SigV4Success otherwise.
+ * @return SigV4InsufficientMemory if the length of `pCredScope` was insufficient to
+ * fit the actual credential scope, SigV4Success otherwise.
  */
-static SigV4Status_t getCredentialScope( SigV4Parameters_t * pSigV4Params,
-                                         SigV4String_t * pCredScope );
+static SigV4Status_t writeCredentialScope( SigV4Parameters_t * pSigV4Params,
+                                           SigV4String_t * pCredScope );
 
 /**
  * @brief Check if the date represents a valid leap year day.
@@ -578,8 +579,10 @@ static void hexEncode( SigV4String_t * pInputStr,
 
     for( i = 0; i < pInputStr->dataLen; i++ )
     {
-        *( hex++ ) = digitArr[ ( pInputStr->pData[ i ] & 0xF0 ) >> 4 ];
-        *( hex++ ) = digitArr[ ( pInputStr->pData[ i ] & 0xF0 ) ];
+        *hex = digitArr[ ( pInputStr->pData[ i ] & 0xF0 ) >> 4 ];
+        hex++;
+        *hex = digitArr[ ( pInputStr->pData[ i ] & 0x0F ) ];
+        hex++;
     }
 
     pHexOutput->dataLen = pInputStr->dataLen * 2;
@@ -587,65 +590,74 @@ static void hexEncode( SigV4String_t * pInputStr,
 
 /*-----------------------------------------------------------*/
 
-static SigV4Status_t getCredentialScope( SigV4Parameters_t * pSigV4Params,
-                                         SigV4String_t * pCredScope )
+static SigV4Status_t writeCredentialScope( SigV4Parameters_t * pSigV4Params,
+                                           SigV4String_t * pCredScope )
 {
-    SigV4Status_t returnVal = SigV4InvalidParameter;
+    SigV4Status_t returnStatus = SigV4InvalidParameter;
     char * pBufWrite = NULL;
     int32_t bytesWritten = 0;
+    size_t sizeNeeded = 0U;
 
     assert( pSigV4Params != NULL );
+    assert( pSigV4Params->pCredentials != NULL );
+    assert( pSigV4Params->pCredentials->pAccessKeyId != NULL );
+    assert( pSigV4Params->pCredentials->accessKeyLen >= 16 );
+    assert( pSigV4Params->pRegion != NULL );
+    assert( pSigV4Params->pService != NULL );
     assert( pCredScope != NULL );
     assert( pCredScope->pData != NULL );
 
+    sizeNeeded = pSigV4Params->pCredentials->accessKeyLen +                  \
+                 CREDENTIAL_SCOPE_SEPARATOR_LEN + ISO_DATE_SCOPE_LEN +       \
+                 CREDENTIAL_SCOPE_SEPARATOR_LEN + pSigV4Params->regionLen +  \
+                 CREDENTIAL_SCOPE_SEPARATOR_LEN + pSigV4Params->serviceLen + \
+                 CREDENTIAL_SCOPE_SEPARATOR_LEN + CREDENTIAL_SCOPE_TERMINATOR_LEN;
+
     pBufWrite = pCredScope->pData;
 
-    /* Use only the first 8 characters from the provided ISO 8601 string (YYYYMMDD). */
-    bytesWritten = snprintf( ( char * ) pBufWrite,
-                             pCredScope->dataLen + 1U,
-                             "%*s",
-                             ISO_DATE_SCOPE_LEN,
-                             pSigV4Params->pDateIso8601 );
-
-    if( bytesWritten == ISO_DATE_SCOPE_LEN )
+    if( pCredScope->dataLen < sizeNeeded )
     {
-        bytesWritten = snprintf( ( char * ) pBufWrite,
-                                 pSigV4Params->regionLen,
-                                 "/%s/",
-                                 pSigV4Params->pRegion );
-
-        if( bytesWritten != pSigV4Params->regionLen )
-        {
-            LogError( ( "Error in formatting provided region string for credential scope." ) );
-            returnVal = SigV4ISOFormattingError;
-        }
-    }
-    else
-    {
-        LogError( ( "Error obtaining date for credential scope string." ) );
-        returnVal = SigV4ISOFormattingError;
+        returnStatus == SigV4InsufficientMemory;
+        LogError( ( "Insufficient memory provided to write the credential scope." ) );
     }
 
-    if( returnVal != SigV4ISOFormattingError )
+    /* Each concatenated component is separated by a '/' character. */
+    if( returnStatus == SigV4Success )
     {
-        bytesWritten = snprintf( ( char * ) pBufWrite,
-                                 pSigV4Params->serviceLen,
-                                 "/%s/",
-                                 pSigV4Params->pService );
+        /* Concatenate access key ID. */
+        ( void ) strncpy( pBufWrite, pSigV4Params->pCredentials->pAccessKeyId, pSigV4Params->pCredentials->accessKeyLen );
+        pBufWrite += pSigV4Params->pCredentials->accessKeyLen;
 
-        if( bytesWritten != pSigV4Params->serviceLen )
-        {
-            LogError( ( "Error in formatting provided service string for credential scope." ) );
-            returnVal = SigV4ISOFormattingError;
-        }
-    }
-    else
-    {
-        pCredScope->dataLen = ISO_DATE_SCOPE_LEN + pSigV4Params->regionLen + pSigV4Params->serviceLen;
-        returnVal = SigV4Success;
+        *pBufWrite = CREDENTIAL_SCOPE_SEPARATOR;
+        pBufWrite += CREDENTIAL_SCOPE_SEPARATOR_LEN;
+
+        /* Concatenate first 8 characters from the provided ISO 8601 string (YYYYMMDD). */
+        ( void ) strncpy( pBufWrite, pSigV4Params->pDateIso8601, ISO_DATE_SCOPE_LEN );
+        pBufWrite += ISO_DATE_SCOPE_LEN;
+
+        *pBufWrite = CREDENTIAL_SCOPE_SEPARATOR;
+        pBufWrite += CREDENTIAL_SCOPE_SEPARATOR_LEN;
+
+        /* Concatenate AWS region. */
+        ( void ) strncpy( pBufWrite, pSigV4Params->pRegion, pSigV4Params->regionLen );
+        pBufWrite += pSigV4Params->regionLen;
+
+        *pBufWrite = CREDENTIAL_SCOPE_SEPARATOR;
+        pBufWrite += CREDENTIAL_SCOPE_SEPARATOR_LEN;
+
+        /* Concatenate AWS service. */
+        ( void ) strncpy( pBufWrite, pSigV4Params->pService, pSigV4Params->serviceLen );
+        pBufWrite += pSigV4Params->serviceLen;
+
+        *pBufWrite = CREDENTIAL_SCOPE_SEPARATOR;
+        pBufWrite += CREDENTIAL_SCOPE_SEPARATOR_LEN;
+
+        /* Concatenate terminator. */
+        ( void ) strncpy( pBufWrite, CREDENTIAL_SCOPE_TERMINATOR, CREDENTIAL_SCOPE_TERMINATOR_LEN );
+        pBufWrite += CREDENTIAL_SCOPE_TERMINATOR_LEN;
     }
 
-    return returnVal;
+    return returnStatus;
 }
 
 /*-----------------------------------------------------------*/
@@ -677,8 +689,8 @@ static SigV4Status_t getCredentialScope( SigV4Parameters_t * pSigV4Params,
 
 /*-----------------------------------------------------------*/
 
-    static int cmpKeyValue( const void * pFirstVal,
-                            const void * pSecondVal )
+    static int cmpKey( const void * pFirstVal,
+                       const void * pSecondVal )
     {
         SigV4KeyValuePair_t * pFirst, * pSecond = NULL;
         size_t lenSmall = 0U;
@@ -708,16 +720,17 @@ static SigV4Status_t getCredentialScope( SigV4Parameters_t * pSigV4Params,
 
 /*-----------------------------------------------------------*/
 
-    static void encodeURI( const char * pURI,
-                           size_t uriLen,
-                           char * pCanonicalURI,
-                           size_t * canonicalURILen,
-                           bool encodeSlash,
-                           bool nullTerminate )
+    static SigV4Status_t encodeURI( const char * pURI,
+                                    size_t uriLen,
+                                    char * pCanonicalURI,
+                                    size_t * canonicalURILen,
+                                    bool encodeSlash,
+                                    bool nullTerminate )
     {
         const char * pURILoc = NULL;
         char * pBufLoc = NULL;
         size_t index = 0U;
+        SigV4Status_t returnStatus = SigV4Success;
 
         assert( pURI != NULL );
         assert( pCanonicalURI != NULL );
@@ -729,35 +742,56 @@ static SigV4Status_t getCredentialScope( SigV4Parameters_t * pSigV4Params,
 
         while( index < uriLen && *pURILoc )
         {
+            if( *remainingLen == 0 )
+            {
+                returnStatus = SigV4InsufficientMemory;
+            }
+
             if( isalnum( *pURILoc ) || ( *pURILoc == '-' ) || ( *pURILoc == '_' ) || ( *pURILoc == '.' ) || ( *pURILoc == '~' ) )
             {
-                *( pBufLoc++ ) = *pURILoc;
-                index++;
+                *pBufLoc = *pURILoc;
+                ++pBufLoc;
+                ++index;
             }
             else if( ( *pURILoc == '/' ) && !encodeSlash )
             {
-                *( pBufLoc++ ) = *pURILoc;
+                *pBufLoc = *pURILoc;
+                ++pBufLoc;
                 index++;
             }
             else
             {
-                *( pBufLoc++ ) = '%';
-                *( pBufLoc++ ) = *pURILoc >> 4;
-                *( pBufLoc++ ) = *pURILoc & 0x0F;
+                if( *remainingLen < 3 )
+                {
+                    returnStatus = SigV4InsufficientMemory;
+                }
+                else
+                {
+                    *( pBufLoc++ ) = '%';
+                    *( pBufLoc++ ) = *pURILoc >> 4;
+                    *( pBufLoc++ ) = *pURILoc & 0x0F;
 
-                index += 3;
+                    index += 3;
+                }
+            }
+
+            if( returnStatus != SigV4Success )
+            {
+                break;
             }
 
             pURILoc++;
         }
 
-        if( nullTerminate )
+        if( nullTerminate && ( index < *canonicalURILen ) )
         {
             *( pBufLoc++ ) = '\0';
             index++;
         }
 
         *canonicalURILen = index;
+
+        return returnStatus;
     }
 
 /*-----------------------------------------------------------*/
@@ -767,6 +801,7 @@ static SigV4Status_t getCredentialScope( SigV4Parameters_t * pSigV4Params,
                                       bool encodeOnce,
                                       CanonicalContext_t * canonicalRequest )
     {
+        SigV4Status_t returnStatus = SigV4Success;
         char * pBufLoc = NULL;
         size_t encodedLen, remainingLen = 0U;
 
@@ -775,31 +810,40 @@ static SigV4Status_t getCredentialScope( SigV4Parameters_t * pSigV4Params,
         assert( canonicalRequest->pBufCur != NULL );
 
         pBufLoc = ( char * ) canonicalRequest->pBufCur;
-        encodedLen, remainingLen = canonicalRequest->bufRemaining;
-        encodeURI( pURI, uriLen, pBufLoc, &encodedLen, false, true );
+        remainingLen = canonicalRequest->bufRemaining, encodedLen = remainingLen;
+        returnStatus = encodeURI( pURI, uriLen, pBufLoc, &encodedLen, false, true );
 
-        remainingLen -= encodedLen;
-
-        if( !encodeOnce )
+        if( returnStatus == SigV4Success )
         {
-            encodeURI( pBufLoc, encodedLen, pBufLoc + encodedLen, &remainingLen, false, true );
-            memmove( canonicalRequest->pBufCur + encodedLen, canonicalRequest->pBufCur, remainingLen );
+            remainingLen -= encodedLen;
+
+            if( !encodeOnce )
+            {
+                returnStatus = encodeURI( pBufLoc, encodedLen, pBufLoc, &remainingLen, false, true );
+            }
         }
 
-        canonicalRequest->pBufCur += remainingLen;
-        *( canonicalRequest->pBufCur++ ) = '\n';
+        if( returnStatus == SigV4Success )
+        {
+            pBufLoc += remainingLen;
+            *( pBufLoc++ ) = '\n';
 
-        canonicalRequest->bufRemaining -= remainingLen + 1;
+            canonicalRequest->bufRemaining -= remainingLen + 1;
+        }
+
+        return returnStatus;
     }
 
 /*-----------------------------------------------------------*/
 
-    static void generateCanonicalQuery( const char * pQuery,
-                                        size_t queryLen,
-                                        CanonicalContext_t * canonicalRequest )
+    static SigV4Status_t generateCanonicalQuery( const char * pQuery,
+                                                 size_t queryLen,
+                                                 CanonicalContext_t * canonicalRequest )
     {
-        size_t index, remainingLen, i = 0U;
-        char * pBufLoc, * tokenQueries, * tokenParams = NULL;
+        SigV4Status_t returnStatus = SigV4Success;
+        size_t numberOfParameters, remainingLen, i = 0U, startIndex = 0U;
+        char * pBufLoc, * tokenParams = NULL;
+        uint8_t fieldHasValue = 0U;
 
         assert( pQuery != NULL );
         assert( queryLen > 0U );
@@ -809,53 +853,121 @@ static SigV4Status_t getCredentialScope( SigV4Parameters_t * pSigV4Params,
         remainingLen = canonicalRequest->bufRemaining;
         pBufLoc = ( char * ) canonicalRequest->pBufCur;
 
-        tokenQueries = strtok( ( char * ) pQuery, "&" );
-
-        while( tokenQueries != NULL )
+        /* Set cursors to each field and value in the query string. */
+        for( i = 0U; i < queryLen; i++ )
         {
-            canonicalRequest->pQueryLoc[ index ] = &tokenQueries[ 0 ];
-            tokenQueries = strtok( NULL, "&" );
+            if( pQuery[ i ] == '=' && !fieldHasValue )
+            {
+                /* Set the field name for the parameter in the query string. */
+                canonicalRequest->pQueryLoc[ numberOfParameters ].key.pData = pQuery[ startIndex ];
+                canonicalRequest->pQueryLoc[ numberOfParameters ].key.dataLen = i - startIndex;
+                startIndex = i + 1U;
+                fieldHasValue = 1U;
+                numberOfParameters++;
+            }
+            else if( pQuery[ i ] == '&' && i != 0 )
+            {
+                /* Set the value name for the parameter in the query string. */
+                if( !fieldHasValue )
+                {
+                    /* The field did not have a value set for it, so set its value to `NULL`. */
+                    canonicalRequest->pQueryLoc[ numberOfParameters ].value.pData = NULL;
+                    canonicalRequest->pQueryLoc[ numberOfParameters ].value.dataLen = 0U;
+                }
+                else
+                {
+                    /* End of value reached, so store a pointer to it. */
+                    canonicalRequest->pQueryLoc[ numberOfParameters ].value.pData = pQuery[ startIndex ];
+                    canonicalRequest->pQueryLoc[ numberOfParameters ].value.dataLen = i - startIndex;
+                }
 
-            index++;
+                startIndex = i + 1U;
+                numberOfParameters++;
+            }
+            else
+            {
+                /* Empty else. */
+            }
         }
 
-        qsort( canonicalRequest->pQueryLoc, index, sizeof( char * ), cmpKeyValue );
-
-        for( i = 0U; i < index; i++ )
+        if( !fieldHasValue )
         {
-            tokenParams = strtok( canonicalRequest->pQueryLoc[ i ], "=" );
+            /* The last field did not have a value set for it, so set its value to `NULL`. */
+            canonicalRequest->pQueryLoc[ numberOfParameters ].value.pData = NULL;
+            canonicalRequest->pQueryLoc[ numberOfParameters ].value.dataLen = 0U;
+        }
 
-            if( tokenParams != NULL )
+        qsort( canonicalRequest->pQueryLoc, numberOfParameters, sizeof( SigV4KeyValuePair_t ), cmpKey );
+
+        for( i = 0U; i < numberOfParameters; i++ )
+        {
+            if( canonicalRequest->pQueryLoc[ i ].key.pData != NULL && canonicalRequest->pQueryLoc[ i ].key.dataLen )
             {
-                encodeURI( tokenParams, strlen( tokenParams ), pBufLoc, &remainingLen, true, false );
-                pBufLoc += remainingLen;
-                *pBufLoc = '='; /* Overwrite null character. */
+                returnStatus = encodeURI( canonicalRequest->pQueryLoc[ i ].key.pData,
+                                          canonicalRequest->pQueryLoc[ i ].key.dataLen,
+                                          pBufLoc,
+                                          &remainingLen,
+                                          true,
+                                          false );
 
-                canonicalRequest->bufRemaining -= remainingLen;
-                remainingLen = canonicalRequest->bufRemaining;
+                if( returnStatus == SigV4Success )
+                {
+                    pBufLoc += remainingLen;
+                    canonicalRequest->bufRemaining -= remainingLen;
+                    remainingLen = canonicalRequest->bufRemaining;
+                }
             }
 
-            tokenParams = strtok( NULL, "=" );
-
-            if( tokenParams != NULL )
+            if( returnStatus == SigV4Success )
             {
-                encodeURI( tokenParams, strlen( tokenParams ), pBufLoc, &remainingLen, true, false );
-                pBufLoc += remainingLen;
+                if( tokenParams != NULL )
+                {
+                    returnStatus = encodeURI( tokenParams, strlen( tokenParams ), pBufLoc, &remainingLen, true, false );
 
-                canonicalRequest->bufRemaining -= remainingLen;
-                remainingLen = canonicalRequest->bufRemaining;
+                    if( returnStatus == SigV4Success )
+                    {
+                        pBufLoc += remainingLen;
+
+                        canonicalRequest->bufRemaining -= remainingLen;
+                    }
+                }
+
+                if( remainingLen < 3 )
+                {
+                    returnStatus = SigV4InsufficientMemory;
+                }
+                else if( index != i + 1 )
+                {
+                    *( pBufLoc++ ) = '&';
+                    canonicalRequest->bufRemaining -= 1;
+                }
+                else
+                {
+                    /* Empty else. */
+                }
             }
 
-            if( index != i + 1 )
+            if( returnStatus != SigV4Success )
             {
-                *( pBufLoc++ ) = '&';
-                *( pBufLoc++ ) = '\0';
-                *( pBufLoc++ ) = '\n';
-                canonicalRequest->bufRemaining -= 3;
+                break;
             }
         }
 
         canonicalRequest->pBufCur = pBufLoc;
+
+        return returnStatus;
+    }
+
+    static SigV4Status_t generateCanonicalHeaders( const char * pQuery,
+                                                   size_t queryLen,
+                                                   CanonicalContext_t * canonicalRequest )
+    {
+    }
+
+    static SigV4Status_t generateCanonicalRequest( const char * pQuery,
+                                                   size_t queryLen,
+                                                   CanonicalContext_t * canonicalRequest )
+    {
     }
 
 #endif /* #if ( SIGV4_USE_CANONICAL_SUPPORT == 1 ) */
@@ -1032,4 +1144,29 @@ SigV4Status_t SigV4_AwsIotDateToIso8601( const char * pDate,
     }
 
     return returnStatus;
+}
+
+void hmac_hash( const unsigned char key[],
+                unsigned long key_len,
+                const unsigned char data[],
+                unsigned long data_len,
+                unsigned char mac[],
+                unsigned long * mac_len,
+                SigV4CryptoInterface cryptoInterface )
+{
+}
+
+SigV4Status_t Sigv4_GenerateHTTPAuthorization( const SigV4Parameters_t * pParams,
+                                               char * pAuthBuf,
+                                               size_t * authBufLen
+                                               char ** pSignature,
+                                               size_t * signatureLen )
+{
+    SigV4Status_t returnStatus = SigV4InvalidParameter;
+
+    returnStatus = verifySigV4Parameters( pParams );
+
+    if( returnStatus == SigV4Success )
+    {
+    }
 }

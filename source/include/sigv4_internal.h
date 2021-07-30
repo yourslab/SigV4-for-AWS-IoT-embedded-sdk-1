@@ -53,6 +53,12 @@
 
 #define ISO_DATE_SCOPE_LEN     8U                                 /**< Length of date substring used in credential scope. */
 
+/* SigV4 related string literals and lengths. */
+#define CREDENTIAL_SCOPE_SEPARATOR    '/'
+#define CREDENTIAL_SCOPE_SEPARATOR_LEN 1U
+#define CREDENTIAL_SCOPE_TERMINATOR   "aws4_request"
+#define CREDENTIAL_SCOPE_TERMINATOR_LEN   (sizeof(CREDENTIAL_SCOPE_TERMINATOR) - 1U)
+
 /**
  * @brief An aggregator representing the individually parsed elements of the
  * user-provided date parameter. This is used to verify the complete date
@@ -98,8 +104,8 @@ typedef SigV4KeyValuePair_t SigV4Header_t; /**< SigV4 header representation */
  */
 typedef struct CanonicalContext
 {
-    char * pQueryLoc[ SIGV4_MAX_QUERY_PAIR_COUNT ];           /**< Query pointers used during sorting. */
-    char * pHeadersLoc[ SIGV4_MAX_HTTP_HEADER_COUNT ];        /**< Header pointers used during sorting. */
+    SigV4KeyValuePair_t pQueryLoc[ SIGV4_MAX_QUERY_PAIR_COUNT ];           /**< Query pointers used during sorting. */
+    SigV4KeyValuePair_t pHeadersLoc[ SIGV4_MAX_HTTP_HEADER_COUNT ];        /**< Header pointers used during sorting. */
 
     uint8_t pBufProcessing[ SIGV4_PROCESSING_BUFFER_LENGTH ]; /**< Internal calculation buffer used during canonicalization. */
     char * pBufCur;                                           /**< pBufProcessing cursor */
