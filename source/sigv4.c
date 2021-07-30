@@ -823,13 +823,14 @@ static SigV4Status_t writeCredentialScope( SigV4Parameters_t * pSigV4Params,
 
 /*-----------------------------------------------------------*/
 
-    static void setQueryStringFieldsAndValues( const char * pQuery,
+    static SigV4Status_t setQueryStringFieldsAndValues( const char * pQuery,
                                                size_t queryLen,
                                                size_t * pNumberOfParameters,
                                                CanonicalContext_t * canonicalRequest )
     {
+        SigV4Status_t returnStatus = SigV4Success;
         size_t numberOfParameters = 0U, startOfFieldOrValue = 0U, i = 0U;
-        bool fieldHasValue = false;
+        uint8_t fieldHasValue = 0U;
 
         /* Set cursors to each field and value in the query string. */
         for( i = 0U; i < queryLen; i++ )
@@ -839,7 +840,7 @@ static SigV4Status_t writeCredentialScope( SigV4Parameters_t * pSigV4Params,
                 pCanonicalRequest->pQueryLoc[ numberOfParameters ].key.pData = pQuery[ startOfFieldOrValue ];
                 pCanonicalRequest->pQueryLoc[ numberOfParameters ].key.dataLen = i - startOfFieldOrValue;
                 startOfFieldOrValue = i + 1U;
-                fieldHasValue = true;
+                fieldHasValue = 1U;
                 numberOfParameters++;
             }
             else if( ( i == queryLen - 1U ) || ( ( pQuery[ i ] == '&' ) && ( i != 0U ) ) )
@@ -857,7 +858,7 @@ static SigV4Status_t writeCredentialScope( SigV4Parameters_t * pSigV4Params,
                     /* End of value reached, so store a pointer to the previously set value. */
                     pCanonicalRequest->pQueryLoc[ numberOfParameters ].value.pData = pQuery[ startOfFieldOrValue ];
                     pCanonicalRequest->pQueryLoc[ numberOfParameters ].value.dataLen = i - startOfFieldOrValue;
-                    fieldHasValue = false;
+                    fieldHasValue = 0U;
                 }
 
                 startOfFieldOrValue = i + 1U;
@@ -866,6 +867,12 @@ static SigV4Status_t writeCredentialScope( SigV4Parameters_t * pSigV4Params,
             else
             {
                 /* Empty else. */
+            }
+
+            if (numberOfParameters > SIGV4_MAX_QUERY_PAIR_COUNT)
+            {
+                LogError(("Number of parameters in the query string has exceeded the maximum of %u.", SIGV4_MAX_QUERY_PAIR_COUNT));
+                returnStatus = SigV4MaxQueryPairCountExceeded;
             }
         }
 
@@ -953,16 +960,23 @@ static SigV4Status_t writeCredentialScope( SigV4Parameters_t * pSigV4Params,
                                                  size_t queryLen,
                                                  CanonicalContext_t * pCanonicalRequest )
     {
+        SigV4Status_t returnStatus = SigV4Success;
+
         assert( pQuery != NULL );
         assert( queryLen > 0U );
         assert( pCanonicalRequest != NULL );
         assert( pCanonicalRequest->pBufCur != NULL );
 
-        setQueryStringFieldsAndValues( pQuery, queryLen, &numberOfParameters, pCanonicalRequest );
-        /* Sort the canonical query parameters by the field name. */
-        qsort( pCanonicalRequest->pQueryLoc, numberOfParameters, sizeof( SigV4KeyValuePair_t ), cmpKey );
+        returnStatus = setQueryStringFieldsAndValues( pQuery, queryLen, &numberOfParameters, pCanonicalRequest );
 
-        return writeCanonicalQueryParameters( pCanonicalRequest );
+        if(returnStatus == SigV4Success)
+        {
+            /* Sort the canonical query parameters by the field name. */
+            qsort( pCanonicalRequest->pQueryLoc, numberOfParameters, sizeof( SigV4KeyValuePair_t ), cmpKey );
+            returnStatus = writeCanonicalQueryParameters( pCanonicalRequest );
+        }
+
+        return returnStatus;
     }
 
 #endif /* #if ( SIGV4_USE_CANONICAL_SUPPORT == 1 ) */

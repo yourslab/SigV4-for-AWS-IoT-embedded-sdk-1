@@ -158,7 +158,9 @@ typedef enum SigV4Status
      * Functions that may return this value:
      * - #SigV4_GenerateHTTPAuthorization
      */
-    SigV4UriParsingError
+    SigV4UriParsingError,
+
+    SigV4MaxQueryPairCountExceeded
 } SigV4Status_t;
 
 /**
