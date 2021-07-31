@@ -91,10 +91,10 @@
  * @param[in, out] canonicalRequest Struct to maintain intermediary buffer
  * and state of canonicalization.
  */
-    static void generateCanonicalURI( const char * pUri,
-                                      size_t uriLen,
-                                      bool encodeOnce,
-                                      CanonicalContext_t * canonicalRequest );
+    static SigV4Status_t generateCanonicalURI( const char * pUri,
+                                               size_t uriLen,
+                                               bool encodeOnce,
+                                               CanonicalContext_t * canonicalRequest );
 
 /**
  * @brief Canonicalize the query string HTTP URL, beginning (but not
@@ -105,9 +105,9 @@
  * @param[in, out] canonicalRequest Struct to maintain intermediary buffer
  * and state of canonicalization.
  */
-    static void generateCanonicalQuery( const char * pQuery,
-                                        size_t queryLen,
-                                        CanonicalContext_t * canonicalRequest );
+    static SigV4Status_t generateCanonicalQuery( const char * pQuery,
+                                                 size_t queryLen,
+                                                 CanonicalContext_t * canonicalRequest );
 
 /**
  * @brief Compare two SigV4 data structures lexicographically, without case-sensitivity.
@@ -614,7 +614,7 @@ static SigV4Status_t writeCredentialScope( SigV4Parameters_t * pSigV4Params,
 
     if( pCredScope->dataLen < sizeNeeded )
     {
-        returnStatus == SigV4InsufficientMemory;
+        returnStatus = SigV4InsufficientMemory;
         LogError( ( "Insufficient memory provided to write the credential scope." ) );
     }
 
@@ -783,17 +783,17 @@ static SigV4Status_t writeCredentialScope( SigV4Parameters_t * pSigV4Params,
 
 /*-----------------------------------------------------------*/
 
-    static void generateCanonicalURI( const char * pUri,
-                                      size_t uriLen,
-                                      bool encodeOnce,
-                                      CanonicalContext_t * canonicalRequest )
+    static SigV4Status_t generateCanonicalURI( const char * pUri,
+                                               size_t uriLen,
+                                               bool encodeOnce,
+                                               CanonicalContext_t * pCanonicalRequest )
     {
         SigV4Status_t returnStatus = SigV4Success;
         char * pBufLoc = NULL;
         size_t encodedLen, remainingLen = 0U;
 
         assert( pUri != NULL );
-        assert( canonicalRequest != NULL );
+        assert( pCanonicalRequest != NULL );
         assert( pCanonicalRequest->pBufCur != NULL );
 
         pBufLoc = pCanonicalRequest->pBufCur;
@@ -823,13 +823,13 @@ static SigV4Status_t writeCredentialScope( SigV4Parameters_t * pSigV4Params,
 
 /*-----------------------------------------------------------*/
 
-    static SigV4Status_t setQueryStringFieldsAndValues( const char * pQuery,
+    static void setQueryStringFieldsAndValues( char * pQuery,
                                                size_t queryLen,
                                                size_t * pNumberOfParameters,
-                                               CanonicalContext_t * canonicalRequest )
+                                               CanonicalContext_t * pCanonicalRequest )
     {
         SigV4Status_t returnStatus = SigV4Success;
-        size_t numberOfParameters = 0U, startOfFieldOrValue = 0U, i = 0U;
+        size_t numberOfParameters = 0U, i = 0U, startOfFieldOrValue = 0U;
         uint8_t fieldHasValue = 0U;
 
         /* Set cursors to each field and value in the query string. */
@@ -837,28 +837,37 @@ static SigV4Status_t writeCredentialScope( SigV4Parameters_t * pSigV4Params,
         {
             if( ( pQuery[ i ] == '=' ) && !fieldHasValue )
             {
-                pCanonicalRequest->pQueryLoc[ numberOfParameters ].key.pData = pQuery[ startOfFieldOrValue ];
+                pCanonicalRequest->pQueryLoc[ numberOfParameters ].key.pData = &pQuery[ startOfFieldOrValue ];
                 pCanonicalRequest->pQueryLoc[ numberOfParameters ].key.dataLen = i - startOfFieldOrValue;
                 startOfFieldOrValue = i + 1U;
                 fieldHasValue = 1U;
-                numberOfParameters++;
             }
             else if( ( i == queryLen - 1U ) || ( ( pQuery[ i ] == '&' ) && ( i != 0U ) ) )
             {
                 if( !fieldHasValue )
                 {
-                    /* The previous field did not have a value set for it, so set its value to `NULL`. */
-                    pCanonicalRequest->pQueryLoc[ numberOfParameters ].key.pData = pQuery[ startOfFieldOrValue ];
+                    pCanonicalRequest->pQueryLoc[ numberOfParameters ].key.pData = &pQuery[ startOfFieldOrValue ];
                     pCanonicalRequest->pQueryLoc[ numberOfParameters ].key.dataLen = i - startOfFieldOrValue;
+                    /* The previous field did not have a value set for it, so set its value to `NULL`. */
                     pCanonicalRequest->pQueryLoc[ numberOfParameters ].value.pData = NULL;
                     pCanonicalRequest->pQueryLoc[ numberOfParameters ].value.dataLen = 0U;
                 }
                 else
                 {
                     /* End of value reached, so store a pointer to the previously set value. */
-                    pCanonicalRequest->pQueryLoc[ numberOfParameters ].value.pData = pQuery[ startOfFieldOrValue ];
+                    pCanonicalRequest->pQueryLoc[ numberOfParameters ].value.pData = &pQuery[ startOfFieldOrValue ];
                     pCanonicalRequest->pQueryLoc[ numberOfParameters ].value.dataLen = i - startOfFieldOrValue;
                     fieldHasValue = 0U;
+                }
+
+                if( i == queryLen - 1U )
+                {
+                    if( !fieldHasValue )
+                    {
+                        pCanonicalRequest->pQueryLoc[ numberOfParameters ].key.dataLen++;
+                    } else {
+                        pCanonicalRequest->pQueryLoc[ numberOfParameters ].value.dataLen++;
+                    }
                 }
 
                 startOfFieldOrValue = i + 1U;
@@ -869,50 +878,51 @@ static SigV4Status_t writeCredentialScope( SigV4Parameters_t * pSigV4Params,
                 /* Empty else. */
             }
 
-            if (numberOfParameters > SIGV4_MAX_QUERY_PAIR_COUNT)
+            if( numberOfParameters > SIGV4_MAX_QUERY_PAIR_COUNT )
             {
-                LogError(("Number of parameters in the query string has exceeded the maximum of %u.", SIGV4_MAX_QUERY_PAIR_COUNT));
-                returnStatus = SigV4MaxQueryPairCountExceeded;
+                break;
             }
         }
 
-        *pNumberOfParameters = &numberOfParameters;
+        *pNumberOfParameters = numberOfParameters;
     }
 
-    static SigV4Status_t writeCanonicalQueryParameters( CanonicalContext_t * pCanonicalRequest )
+    static SigV4Status_t writeCanonicalQueryParameters( CanonicalContext_t * pCanonicalRequest,
+                                                        size_t numberOfParameters )
     {
         SigV4Status_t returnStatus = SigV4Success;
         char * pBufLoc = NULL;
-        size_t remainingLen = 0U;
+        size_t encodedLen = 0U, i = 0U;
 
         assert( pCanonicalRequest != NULL );
         assert( pCanonicalRequest->pBufCur != NULL );
+        assert( pCanonicalRequest->pQueryLoc != NULL );
 
         pBufLoc = pCanonicalRequest->pBufCur;
-        remainingLen = pCanonicalRequest->bufRemaining;
 
         for( i = 0U; i < numberOfParameters; i++ )
         {
-            assert( pCanonicalRequest->pQueryLoc[ i ].key.pData == NULL );
-            assert( pCanonicalRequest->pQueryLoc[ i ].key.dataLen == 0U );
+            assert( pCanonicalRequest->pQueryLoc[ i ].key.pData != NULL );
+            assert( pCanonicalRequest->pQueryLoc[ i ].key.dataLen > 0U );
 
+            encodedLen = pCanonicalRequest->bufRemaining;
             returnStatus = encodeURI( pCanonicalRequest->pQueryLoc[ i ].key.pData,
                                       pCanonicalRequest->pQueryLoc[ i ].key.dataLen,
                                       pBufLoc,
-                                      &remainingLen,
+                                      &encodedLen,
                                       true );
 
             if( returnStatus == SigV4Success )
             {
-                pBufLoc += remainingLen;
-                pCanonicalRequest->bufRemaining -= remainingLen;
-                remainingLen = pCanonicalRequest->bufRemaining;
+                pBufLoc += encodedLen;
+                pCanonicalRequest->bufRemaining -= encodedLen;
+                encodedLen = pCanonicalRequest->bufRemaining;
 
                 /* An empty value corresponds to an empty string. */
                 if( ( pCanonicalRequest->pQueryLoc[ i ].value.dataLen > 0U ) &&
                     ( pCanonicalRequest->pQueryLoc[ i ].value.pData != NULL ) )
                 {
-                    if( remainingLen < 1U )
+                    if( encodedLen < 1U )
                     {
                         returnStatus = SigV4InsufficientMemory;
                     }
@@ -921,18 +931,23 @@ static SigV4Status_t writeCredentialScope( SigV4Parameters_t * pSigV4Params,
                         *pBufLoc = '=';
                         pBufLoc++;
                         pCanonicalRequest->bufRemaining -= 1;
-                        returnStatus = encodeURI( pValue, valueLen, pBufLoc, &remainingLen, true );
+                        encodedLen = pCanonicalRequest->bufRemaining;
+                        returnStatus = encodeURI( pCanonicalRequest->pQueryLoc[ i ].value.pData,
+                                                  pCanonicalRequest->pQueryLoc[ i ].value.dataLen,
+                                                  pBufLoc,
+                                                  &encodedLen,
+                                                  true );
+                    }
+
+                    if( returnStatus == SigV4Success )
+                    {
+                        pBufLoc += encodedLen;
+                        pCanonicalRequest->bufRemaining -= encodedLen;
                     }
                 }
             }
 
-            if( returnStatus == SigV4Success )
-            {
-                pBufLoc += remainingLen;
-                pCanonicalRequest->bufRemaining -= remainingLen;
-            }
-
-            if( ( pCanonicalRequest->bufRemaining < 1U ) && ( index != i + 1 ) )
+            if( ( pCanonicalRequest->bufRemaining < 1U ) && ( numberOfParameters != i + 1 ) )
             {
                 returnStatus = SigV4InsufficientMemory;
             }
@@ -961,19 +976,28 @@ static SigV4Status_t writeCredentialScope( SigV4Parameters_t * pSigV4Params,
                                                  CanonicalContext_t * pCanonicalRequest )
     {
         SigV4Status_t returnStatus = SigV4Success;
+        size_t numberOfParameters;
 
         assert( pQuery != NULL );
         assert( queryLen > 0U );
         assert( pCanonicalRequest != NULL );
         assert( pCanonicalRequest->pBufCur != NULL );
 
-        returnStatus = setQueryStringFieldsAndValues( pQuery, queryLen, &numberOfParameters, pCanonicalRequest );
+        /* Note: Cast is used to remove the const with the assumption that #setQueryStringFieldsAndValues
+         * never updates #pQuery.  */
+        setQueryStringFieldsAndValues( ( char * ) pQuery, queryLen, &numberOfParameters, pCanonicalRequest );
 
-        if(returnStatus == SigV4Success)
+        if( numberOfParameters > SIGV4_MAX_QUERY_PAIR_COUNT )
+        {
+            LogError( ( "Number of parameters in the query string has exceeded the maximum of %u.", SIGV4_MAX_QUERY_PAIR_COUNT ) );
+            returnStatus = SigV4MaxQueryPairCountExceeded;
+        }
+
+        if( returnStatus == SigV4Success )
         {
             /* Sort the canonical query parameters by the field name. */
             qsort( pCanonicalRequest->pQueryLoc, numberOfParameters, sizeof( SigV4KeyValuePair_t ), cmpKey );
-            returnStatus = writeCanonicalQueryParameters( pCanonicalRequest );
+            returnStatus = writeCanonicalQueryParameters( pCanonicalRequest, numberOfParameters );
         }
 
         return returnStatus;
@@ -1068,11 +1092,6 @@ static SigV4Status_t verifySigV4Parameters( const SigV4Parameters_t * pParams )
         LogError( ( "Parameter check failed: pParams->pHttpParameters->pHeaders is NULL." ) );
         returnStatus = SigV4InvalidParameter;
     }
-    else if( pParams->pHttpParameters->pPayload == NULL )
-    {
-        LogError( ( "Parameter check failed: pParams->pHttpParameters->pPayload is NULL." ) );
-        returnStatus = SigV4InvalidParameter;
-    }
 
     return returnStatus;
 }
@@ -1155,24 +1174,25 @@ SigV4Status_t SigV4_AwsIotDateToIso8601( const char * pDate,
     return returnStatus;
 }
 
-SigV4Status_t Sigv4_GenerateHTTPAuthorization( const SigV4Parameters_t * pParams,
+SigV4Status_t SigV4_GenerateHTTPAuthorization( const SigV4Parameters_t * pParams,
                                                char * pAuthBuf,
-                                               size_t * authBufLen
+                                               size_t * authBufLen,
                                                char ** pSignature,
                                                size_t * signatureLen )
 {
-    SigV4Status_t returnStatus = SigV4InvalidParameter;
+    SigV4Status_t returnStatus = SigV4Success;
 
-    returnStatus = verifySigV4Parameters( pParams );
+    /*returnStatus = verifySigV4Parameters( pParams ); */
 
     if( returnStatus == SigV4Success )
     {
         CanonicalContext_t canonicalContext;
-        pCanonicalRequest->pBufCur = pCanonicalRequest->pBufProcessing;
+        canonicalContext.pBufCur = canonicalContext.pBufProcessing;
+        canonicalContext.bufRemaining = SIGV4_PROCESSING_BUFFER_LENGTH;
 
         returnStatus = generateCanonicalQuery( pParams->pHttpParameters->pQuery, pParams->pHttpParameters->queryLen, &canonicalContext );
-        printf("Return status is %d", returnStatus);
-        printf("Canonical query is %.*s", SIGV4_PROCESSING_BUFFER_LENGTH - canonicalContext.bufRemaining, canonicalContext.pBufProcessing);
+        printf( "Return status is %d", returnStatus );
+        printf( "Canonical query is %.*s", SIGV4_PROCESSING_BUFFER_LENGTH - canonicalContext.bufRemaining, canonicalContext.pBufProcessing );
     }
 
     return returnStatus;

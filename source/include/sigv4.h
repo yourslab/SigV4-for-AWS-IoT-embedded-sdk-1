@@ -447,9 +447,9 @@ SigV4Status_t SigV4_AwsIotDateToIso8601( const char * pDate,
  * @param[out] signatureLen The length of pSignature.
  * @return SUCCESS code if successful, error code otherwise.
  */
-sigv4ReturnCode_t Sigv4_GenerateHTTPAuthorization( const SigV4Parameters_t * pParams,
-                                                  char* pAuthBuf,
-                                                  size_t* authBufLen
-                                                  char** pSignature,
-                                                  size_t * signatureLen );
+SigV4Status_t Sigv4_GenerateHTTPAuthorization( const SigV4Parameters_t * pParams,
+                                            char* pAuthBuf,
+                                            size_t* authBufLen,
+                                            char** pSignature,
+                                            size_t * signatureLen );
 #endif /* SIGV4_H_ */
