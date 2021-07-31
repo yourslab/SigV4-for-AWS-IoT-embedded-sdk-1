@@ -87,15 +87,15 @@
  * @param[in] pUri HTTP request URI, also known that the request absolute
  * path.
  * @param[in] uriLen Length of pUri.
- * @param[in] encodeOnce Service-dependent option to indicate whether
- * encoding should be done once or twice. For example, S3 requires that the
+ * @param[in] encodeTwice Service-dependent option to indicate whether
+ * encoding should be done twice. For example, S3 requires that the
  * URI is encoded only once, while other services encode twice.
  * @param[in, out] canonicalRequest Struct to maintain intermediary buffer
  * and state of canonicalization.
  */
     static SigV4Status_t generateCanonicalURI( const char * pUri,
                                                size_t uriLen,
-                                               bool encodeOnce,
+                                               bool encodeTwice,
                                                CanonicalContext_t * canonicalRequest );
 
 /**
@@ -870,37 +870,49 @@ static SigV4Status_t writeCredentialScope( SigV4Parameters_t * pSigV4Params,
 
     static SigV4Status_t generateCanonicalURI( const char * pUri,
                                                size_t uriLen,
-                                               bool encodeOnce,
+                                               bool encodeTwice,
                                                CanonicalContext_t * pCanonicalRequest )
     {
         SigV4Status_t returnStatus = SigV4Success;
         char * pBufLoc = NULL;
-        size_t encodedLen, remainingLen = 0U;
+        size_t encodedLen = 0U;
 
         assert( pUri != NULL );
         assert( pCanonicalRequest != NULL );
         assert( pCanonicalRequest->pBufCur != NULL );
 
         pBufLoc = pCanonicalRequest->pBufCur;
-        remainingLen = pCanonicalRequest->bufRemaining, encodedLen = remainingLen;
+        encodedLen = pCanonicalRequest->bufRemaining;
         returnStatus = encodeURI( pUri, uriLen, pBufLoc, &encodedLen, false, false );
 
         if( returnStatus == SigV4Success )
         {
-            remainingLen -= encodedLen;
-
-            if( !encodeOnce )
+            if( encodeTwice )
             {
-                returnStatus = encodeURI( pBufLoc, encodedLen, pBufLoc, &remainingLen, false, false );
+                size_t doubleEncodedLen = pCanonicalRequest->bufRemaining - encodedLen;
+
+                /* Note that encoding is not done in place. */
+                returnStatus = encodeURI( pBufLoc,
+                                          encodedLen,
+                                          pBufLoc + encodedLen,
+                                          &doubleEncodedLen,
+                                          false,
+                                          false );
+
+                if( returnStatus == SigV4Success )
+                {
+                    ( void ) memmove( pBufLoc, pBufLoc + encodedLen, doubleEncodedLen );
+                    pBufLoc += doubleEncodedLen;
+                    pCanonicalRequest->bufRemaining -= doubleEncodedLen;
+                    pCanonicalRequest->pBufCur = pBufLoc;
+                }
             }
-        }
-
-        if( returnStatus == SigV4Success )
-        {
-            pBufLoc += remainingLen;
-            *( pBufLoc++ ) = '\n';
-
-            pCanonicalRequest->bufRemaining -= remainingLen + 1;
+            else
+            {
+                pBufLoc += encodedLen;
+                pCanonicalRequest->bufRemaining -= encodedLen;
+                pCanonicalRequest->pBufCur = pBufLoc;
+            }
         }
 
         return returnStatus;
@@ -936,7 +948,7 @@ static SigV4Status_t writeCredentialScope( SigV4Parameters_t * pSigV4Params,
 
                 if( i - startOfFieldOrValue == 0U )
                 {
-                    /* A field should not be empty, but a value can be empty
+                    /* A field should never be empty, but a value can be empty
                      * provided a field was specified first. */
                 }
                 else if( !fieldHasValue )
@@ -1043,7 +1055,6 @@ static SigV4Status_t writeCredentialScope( SigV4Parameters_t * pSigV4Params,
             {
                 *pBufLoc = '&';
                 pCanonicalRequest->bufRemaining -= 1;
-                pCanonicalRequest->pBufCur = ++pBufLoc;
             }
             else
             {
@@ -1053,6 +1064,10 @@ static SigV4Status_t writeCredentialScope( SigV4Parameters_t * pSigV4Params,
             if( returnStatus != SigV4Success )
             {
                 break;
+            }
+            else
+            {
+                pCanonicalRequest->pBufCur = pBufLoc;
             }
         }
 
@@ -1277,16 +1292,23 @@ SigV4Status_t SigV4_GenerateHTTPAuthorization( const SigV4Parameters_t * pParams
                                                size_t * signatureLen )
 {
     SigV4Status_t returnStatus = SigV4Success;
+    CanonicalContext_t canonicalContext;
+
+    canonicalContext.pBufCur = canonicalContext.pBufProcessing;
+    canonicalContext.bufRemaining = SIGV4_PROCESSING_BUFFER_LENGTH;
 
     /*returnStatus = verifySigV4Parameters( pParams ); */
 
     if( returnStatus == SigV4Success )
-    {
-        CanonicalContext_t canonicalContext;
-        canonicalContext.pBufCur = canonicalContext.pBufProcessing;
-        canonicalContext.bufRemaining = SIGV4_PROCESSING_BUFFER_LENGTH;
+      {
+       returnStatus = generateCanonicalQuery( pParams->pHttpParameters->pQuery, pParams->pHttpParameters->queryLen, &canonicalContext );
+       printf( "Return status is %d", returnStatus );
+       printf( "Canonical query is %.*s\n", SIGV4_PROCESSING_BUFFER_LENGTH - canonicalContext.bufRemaining, canonicalContext.pBufProcessing );
+     }
 
-        returnStatus = generateCanonicalQuery( pParams->pHttpParameters->pQuery, pParams->pHttpParameters->queryLen, &canonicalContext );
+    if( returnStatus == SigV4Success )
+    {
+        returnStatus = generateCanonicalURI( pParams->pHttpParameters->pPath, pParams->pHttpParameters->pathLen, false, &canonicalContext );
         printf( "Return status is %d", returnStatus );
         printf( "Canonical query is %.*s\n", SIGV4_PROCESSING_BUFFER_LENGTH - canonicalContext.bufRemaining, canonicalContext.pBufProcessing );
     }
