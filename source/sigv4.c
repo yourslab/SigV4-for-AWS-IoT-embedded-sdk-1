@@ -70,12 +70,14 @@
  * @param[in, out] canonicalURILen input: the length of pCanonicalURI,
  * output: the length of the generated canonical URI.
  * @param[in] encodeSlash Option to indicate if slashes should be encoded.
+ * @param[in] doubleEncodeEquals Option to indicate if equals should be double-encoded.
  */
     static SigV4Status_t encodeURI( const char * pUri,
                                     size_t uriLen,
                                     char * pCanonicalURI,
                                     size_t * canonicalURILen,
-                                    bool encodeSlash );
+                                    bool encodeSlash,
+                                    bool doubleEncodeEquals );
 
 /**
  * @brief Canonicalize the full URI path. The input URI starts after the
@@ -686,8 +688,8 @@ static SigV4Status_t writeCredentialScope( SigV4Parameters_t * pSigV4Params,
 
 /*-----------------------------------------------------------*/
 
-    static int cmpKey( const void * pFirstVal,
-                       const void * pSecondVal )
+    static int cmpKeyValue( const void * pFirstVal,
+                            const void * pSecondVal )
     {
         SigV4KeyValuePair_t * pFirst, * pSecond = NULL;
         size_t lenSmall = 0U;
@@ -717,15 +719,65 @@ static SigV4Status_t writeCredentialScope( SigV4Parameters_t * pSigV4Params,
 
 /*-----------------------------------------------------------*/
 
+    static int cmpQueryFieldValue( const void * pFirstVal,
+                                   const void * pSecondVal )
+    {
+        SigV4KeyValuePair_t * pFirst, * pSecond = NULL;
+        size_t lenSmall = 0U;
+        int32_t compResult = -1;
+
+        assert( pFirstVal != NULL );
+        assert( pSecondVal != NULL );
+
+        pFirst = ( SigV4KeyValuePair_t * ) pFirstVal;
+        pSecond = ( SigV4KeyValuePair_t * ) pSecondVal;
+
+        assert( !emptySigV4String( &pFirst->key ) );
+        assert( !emptySigV4String( &pSecond->key ) );
+
+        lenSmall = ( pFirst->key.dataLen < pSecond->key.dataLen ) ? pFirst->key.dataLen : pSecond->key.dataLen;
+        compResult = ( int32_t ) strncmp( ( char * ) pFirst->key.pData,
+                                          ( char * ) pSecond->key.pData,
+                                          lenSmall );
+
+        if( compResult == 0 )
+        {
+            if( pFirst->key.dataLen == pSecond->key.dataLen )
+            {
+                /* The fields are equal, so sorting must be done by value. */
+                lenSmall = ( pFirst->value.dataLen < pSecond->value.dataLen ) ? pFirst->value.dataLen : pSecond->value.dataLen;
+                compResult = ( int32_t ) strncmp( ( char * ) pFirst->value.pData,
+                                                  ( char * ) pSecond->value.pData,
+                                                  lenSmall );
+            }
+            else
+            {
+                /* Fields share a common prefix, so the shorter one should come first. */
+                compResult = ( pFirst->key.dataLen < pSecond->key.dataLen ) ? -1 : 1;
+            }
+        }
+
+        if( compResult == 0 && pFirst->value.dataLen != pSecond->value.dataLen )
+        {
+            /* Values share a common prefix, so the shorter one should come first. */
+            compResult = ( pFirst->value.dataLen < pSecond->value.dataLen ) ? -1 : 1;
+        }
+
+        return compResult;
+    }
+
+/*-----------------------------------------------------------*/
+
     static SigV4Status_t encodeURI( const char * pUri,
                                     size_t uriLen,
                                     char * pCanonicalURI,
                                     size_t * canonicalURILen,
-                                    bool encodeSlash )
+                                    bool encodeSlash,
+                                    bool doubleEncodeEquals )
     {
         const char * pUriLoc = NULL;
         char * pBufLoc = NULL;
-        size_t index = 0U;
+        size_t i = 0U, bytesConsumed = 0U;
         SigV4Status_t returnStatus = SigV4Success;
 
         assert( pUri != NULL );
@@ -736,22 +788,44 @@ static SigV4Status_t writeCredentialScope( SigV4Parameters_t * pSigV4Params,
         pUriLoc = ( const char * ) pUri;
         pBufLoc = ( char * ) pCanonicalURI;
 
-        while( index < uriLen && *pUriLoc )
+        while( i++ < uriLen && *pUriLoc )
         {
             if( returnStatus != SigV4Success )
             {
                 break;
+            }
+            else if( doubleEncodeEquals && ( *pUriLoc == '=' ) )
+            {
+                if( ( bytesConsumed > SIZE_MAX - 5U ) || ( bytesConsumed + 5U > *canonicalURILen ) )
+                {
+                    returnStatus = SigV4InsufficientMemory;
+                }
+                else
+                {
+                    *pBufLoc = '%';
+                    ++pBufLoc;
+                    *pBufLoc = '2';
+                    ++pBufLoc;
+                    *pBufLoc = '5';
+                    ++pBufLoc;
+                    *pBufLoc = '3';
+                    ++pBufLoc;
+                    *pBufLoc = 'D';
+                    ++pBufLoc;
+
+                    bytesConsumed += 5;
+                }
             }
             else if( isalnum( *pUriLoc ) || ( *pUriLoc == '-' ) || ( *pUriLoc == '_' ) || ( *pUriLoc == '.' ) || ( *pUriLoc == '~' ) ||
                      ( ( *pUriLoc == '/' ) && !encodeSlash ) )
             {
                 *pBufLoc = *pUriLoc;
                 ++pBufLoc;
-                ++index;
+                ++bytesConsumed;
             }
             else
             {
-                if( ( index <= SIZE_MAX - 3U ) && ( index + 3U > *canonicalURILen ) )
+                if( ( bytesConsumed > SIZE_MAX - 3U ) || ( bytesConsumed + 3U > *canonicalURILen ) )
                 {
                     returnStatus = SigV4InsufficientMemory;
                 }
@@ -764,11 +838,11 @@ static SigV4Status_t writeCredentialScope( SigV4Parameters_t * pSigV4Params,
                     *pBufLoc = *pUriLoc & 0x0F;
                     ++pBufLoc;
 
-                    index += 3;
+                    bytesConsumed += 3;
                 }
             }
 
-            if( index > *canonicalURILen )
+            if( bytesConsumed > *canonicalURILen )
             {
                 returnStatus = SigV4InsufficientMemory;
             }
@@ -776,7 +850,7 @@ static SigV4Status_t writeCredentialScope( SigV4Parameters_t * pSigV4Params,
             pUriLoc++;
         }
 
-        *canonicalURILen = index;
+        *canonicalURILen = bytesConsumed;
 
         return returnStatus;
     }
@@ -798,7 +872,7 @@ static SigV4Status_t writeCredentialScope( SigV4Parameters_t * pSigV4Params,
 
         pBufLoc = pCanonicalRequest->pBufCur;
         remainingLen = pCanonicalRequest->bufRemaining, encodedLen = remainingLen;
-        returnStatus = encodeURI( pUri, uriLen, pBufLoc, &encodedLen, false );
+        returnStatus = encodeURI( pUri, uriLen, pBufLoc, &encodedLen, false, false );
 
         if( returnStatus == SigV4Success )
         {
@@ -806,7 +880,7 @@ static SigV4Status_t writeCredentialScope( SigV4Parameters_t * pSigV4Params,
 
             if( !encodeOnce )
             {
-                returnStatus = encodeURI( pBufLoc, encodedLen, pBufLoc, &remainingLen, false );
+                returnStatus = encodeURI( pBufLoc, encodedLen, pBufLoc, &remainingLen, false, false );
             }
         }
 
@@ -844,6 +918,12 @@ static SigV4Status_t writeCredentialScope( SigV4Parameters_t * pSigV4Params,
             }
             else if( ( i == queryLen - 1U ) || ( ( pQuery[ i ] == '&' ) && ( i != 0U ) ) )
             {
+                /* Adjust for the length of the last query parameter. */
+                if( i == queryLen - 1U )
+                {
+                    i++;
+                }
+
                 if( !fieldHasValue )
                 {
                     pCanonicalRequest->pQueryLoc[ numberOfParameters ].key.pData = &pQuery[ startOfFieldOrValue ];
@@ -858,16 +938,6 @@ static SigV4Status_t writeCredentialScope( SigV4Parameters_t * pSigV4Params,
                     pCanonicalRequest->pQueryLoc[ numberOfParameters ].value.pData = &pQuery[ startOfFieldOrValue ];
                     pCanonicalRequest->pQueryLoc[ numberOfParameters ].value.dataLen = i - startOfFieldOrValue;
                     fieldHasValue = 0U;
-                }
-
-                if( i == queryLen - 1U )
-                {
-                    if( !fieldHasValue )
-                    {
-                        pCanonicalRequest->pQueryLoc[ numberOfParameters ].key.dataLen++;
-                    } else {
-                        pCanonicalRequest->pQueryLoc[ numberOfParameters ].value.dataLen++;
-                    }
                 }
 
                 startOfFieldOrValue = i + 1U;
@@ -910,7 +980,8 @@ static SigV4Status_t writeCredentialScope( SigV4Parameters_t * pSigV4Params,
                                       pCanonicalRequest->pQueryLoc[ i ].key.dataLen,
                                       pBufLoc,
                                       &encodedLen,
-                                      true );
+                                      true,
+                                      false );
 
             if( returnStatus == SigV4Success )
             {
@@ -929,13 +1000,14 @@ static SigV4Status_t writeCredentialScope( SigV4Parameters_t * pSigV4Params,
                     else
                     {
                         *pBufLoc = '=';
-                        pBufLoc++;
+                        ++pBufLoc;
                         pCanonicalRequest->bufRemaining -= 1;
                         encodedLen = pCanonicalRequest->bufRemaining;
                         returnStatus = encodeURI( pCanonicalRequest->pQueryLoc[ i ].value.pData,
                                                   pCanonicalRequest->pQueryLoc[ i ].value.dataLen,
                                                   pBufLoc,
                                                   &encodedLen,
+                                                  true,
                                                   true );
                     }
 
@@ -995,8 +1067,16 @@ static SigV4Status_t writeCredentialScope( SigV4Parameters_t * pSigV4Params,
 
         if( returnStatus == SigV4Success )
         {
-            /* Sort the canonical query parameters by the field name. */
-            qsort( pCanonicalRequest->pQueryLoc, numberOfParameters, sizeof( SigV4KeyValuePair_t ), cmpKey );
+            /* Sort the parameter names by character code point in ascending order.
+             * Parameters with duplicate names should be sorted by value. */
+            qsort( pCanonicalRequest->pQueryLoc, numberOfParameters, sizeof( SigV4KeyValuePair_t ), cmpQueryFieldValue );
+
+            /* URI-encode each parameter name and value according to the following rules of SigV4:
+             *  - Do not URI-encode any of the unreserved characters that RFC 3986 defines:
+             *      A-Z, a-z, 0-9, hyphen ( - ), underscore ( _ ), period ( . ), and tilde ( ~ ).
+             *  - Percent-encode all other characters with %XY, where X and Y are hexadecimal characters (0-9 and uppercase A-F).
+             *  - Double-encode any equals ( = ) characters in parameter values.
+             */
             returnStatus = writeCanonicalQueryParameters( pCanonicalRequest, numberOfParameters );
         }
 
