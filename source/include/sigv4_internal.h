@@ -112,4 +112,12 @@ typedef struct CanonicalContext
     size_t bufRemaining;                                      /**< pBufProcessing value used during internal calculation. */
 } CanonicalContext_t;
 
+typedef struct HmacContext
+{
+    const SigV4CryptoInterface_t * pCryptoInterface;
+    char key[SIGV4_HASH_MAX_BLOCK_LENGTH];
+    size_t keyLen;
+} HmacContext_t;
+
+
 #endif /* ifndef SIGV4_INTERNAL_H_ */

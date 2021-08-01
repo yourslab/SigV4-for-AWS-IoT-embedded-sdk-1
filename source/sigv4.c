@@ -151,7 +151,7 @@ static void intToAscii( int32_t value,
  * @return SigV4InsufficientMemory if the length of `pCredScope` was insufficient to
  * fit the actual credential scope, SigV4Success otherwise.
  */
-static SigV4Status_t generateCredentialScope( SigV4Parameters_t * pSigV4Params,
+static SigV4Status_t generateCredentialScope( const SigV4Parameters_t * pSigV4Params,
                                               SigV4String_t * pCredScope );
 
 /**
@@ -589,7 +589,7 @@ static void hexEncode( SigV4String_t * pInputStr,
 
 /*-----------------------------------------------------------*/
 
-static SigV4Status_t generateCredentialScope( SigV4Parameters_t * pSigV4Params,
+static SigV4Status_t generateCredentialScope( const SigV4Parameters_t * pSigV4Params,
                                               SigV4String_t * pCredScope )
 {
     SigV4Status_t returnStatus = SigV4Success;
@@ -623,35 +623,35 @@ static SigV4Status_t generateCredentialScope( SigV4Parameters_t * pSigV4Params,
     if( returnStatus == SigV4Success )
     {
         /* Concatenate access key ID. */
-        ( void ) strncpy( pBufWrite, pSigV4Params->pCredentials->pAccessKeyId, pSigV4Params->pCredentials->accessKeyIdLen );
+        ( void ) memcpy( pBufWrite, pSigV4Params->pCredentials->pAccessKeyId, pSigV4Params->pCredentials->accessKeyIdLen );
         pBufWrite += pSigV4Params->pCredentials->accessKeyIdLen;
 
         *pBufWrite = CREDENTIAL_SCOPE_SEPARATOR;
         pBufWrite += CREDENTIAL_SCOPE_SEPARATOR_LEN;
 
         /* Concatenate first 8 characters from the provided ISO 8601 string (YYYYMMDD). */
-        ( void ) strncpy( pBufWrite, pSigV4Params->pDateIso8601, ISO_DATE_SCOPE_LEN );
+        ( void ) memcpy( pBufWrite, pSigV4Params->pDateIso8601, ISO_DATE_SCOPE_LEN );
         pBufWrite += ISO_DATE_SCOPE_LEN;
 
         *pBufWrite = CREDENTIAL_SCOPE_SEPARATOR;
         pBufWrite += CREDENTIAL_SCOPE_SEPARATOR_LEN;
 
         /* Concatenate AWS region. */
-        ( void ) strncpy( pBufWrite, pSigV4Params->pRegion, pSigV4Params->regionLen );
+        ( void ) memcpy( pBufWrite, pSigV4Params->pRegion, pSigV4Params->regionLen );
         pBufWrite += pSigV4Params->regionLen;
 
         *pBufWrite = CREDENTIAL_SCOPE_SEPARATOR;
         pBufWrite += CREDENTIAL_SCOPE_SEPARATOR_LEN;
 
         /* Concatenate AWS service. */
-        ( void ) strncpy( pBufWrite, pSigV4Params->pService, pSigV4Params->serviceLen );
+        ( void ) memcpy( pBufWrite, pSigV4Params->pService, pSigV4Params->serviceLen );
         pBufWrite += pSigV4Params->serviceLen;
 
         *pBufWrite = CREDENTIAL_SCOPE_SEPARATOR;
         pBufWrite += CREDENTIAL_SCOPE_SEPARATOR_LEN;
 
         /* Concatenate terminator. */
-        ( void ) strncpy( pBufWrite, CREDENTIAL_SCOPE_TERMINATOR, CREDENTIAL_SCOPE_TERMINATOR_LEN );
+        ( void ) memcpy( pBufWrite, CREDENTIAL_SCOPE_TERMINATOR, CREDENTIAL_SCOPE_TERMINATOR_LEN );
         pBufWrite += CREDENTIAL_SCOPE_TERMINATOR_LEN;
 
         pCredScope->dataLen = sizeNeeded;
@@ -771,14 +771,20 @@ static SigV4Status_t generateCredentialScope( SigV4Parameters_t * pSigV4Params,
 
     static char toUpperHexChar( const char value )
     {
+        char hexChar;
+
         assert( value < 16 );
 
         if( value < 10 )
         {
-            return( '0' + value );
+            hexChar = '0' + value;
+        }
+        else
+        {
+            hexChar = ( 'A' + value ) - 10;
         }
 
-        return 'A' + value - 10;
+        return hexChar;
     }
 
     static SigV4Status_t encodeURI( const char * pUri,
@@ -1206,11 +1212,11 @@ static SigV4Status_t verifySigV4Parameters( const SigV4Parameters_t * pParams )
 
 /*-----------------------------------------------------------*/
 
-static int32_t hash( const SigV4CryptoInterface_t * pCryptoInterface,
-                     const uint8_t * pInput,
-                     size_t inputLen,
-                     uint8_t * pOutput,
-                     size_t outputLen )
+static int32_t completeHash( const char * pInput,
+                             size_t inputLen,
+                             char * pOutput,
+                             size_t outputLen,
+                             const SigV4CryptoInterface_t * pCryptoInterface )
 {
     int32_t hashStatus = -1;
 
@@ -1228,18 +1234,208 @@ static int32_t hash( const SigV4CryptoInterface_t * pCryptoInterface,
                                                   pOutput, outputLen );
     }
 
+    return hashStatus;
+}
+
+/*-----------------------------------------------------------*/
+
+int32_t hmacKey( HmacContext_t * pHmacContext,
+                 const char * pKey,
+                 size_t keyLen )
+{
+    int32_t returnStatus = -1;
+    const SigV4CryptoInterface_t * pCryptoInterface = NULL;
+
+    assert( pHmacContext != NULL );
+    assert( pHmacContext->key != NULL );
+    assert( pHmacContext->keyLen == 0 );
+    assert( pHmacContext->pCryptoInterface != NULL );
+    assert( pHmacContext->pCryptoInterface->hashInit != NULL );
+    assert( pHmacContext->pCryptoInterface->hashUpdate != NULL );
+    assert( pHmacContext->pCryptoInterface->hashFinal != NULL );
+
+    pCryptoInterface = pHmacContext->pCryptoInterface;
+
+    returnStatus = pCryptoInterface->hashInit( pCryptoInterface->pHashContext );
+
+    if( keyLen <= pCryptoInterface->hashBlockLen )
+    {
+        /* The key fits into the block so just use it as is. */
+        ( void ) memcpy( pHmacContext->key, pKey, keyLen );
+    }
+    else if( returnStatus == 0 )
+    {
+        /* Hash down the key in order to create a block-sized derived key. */
+        returnStatus = pCryptoInterface->hashUpdate( pCryptoInterface->pHashContext,
+                                                     pKey,
+                                                     keyLen );
+
+        if( returnStatus == 0 )
+        {
+            returnStatus = pCryptoInterface->hashFinal( pCryptoInterface->pHashContext,
+                                                        pHmacContext->key,
+                                                        pHmacContext->keyLen );
+            keyLen = pCryptoInterface->hashDigestLen;
+        }
+    }
+    else
+    {
+        /* Empty else. */
+    }
+
+    assert( keyLen <= pCryptoInterface->hashBlockLen );
+
+    if( returnStatus == 0 )
+    {
+        /* Zero pad to the right so that the key has the same size as the block size. */
+        ( void ) memset( ( void * ) ( pHmacContext->key + keyLen ),
+                         0,
+                         pCryptoInterface->hashBlockLen - keyLen );
+        pHmacContext->keyLen = pCryptoInterface->hashBlockLen;
+    }
+
     return returnStatus;
 }
 
 /*-----------------------------------------------------------*/
 
-static int32_t hash( const SigV4CryptoInterface_t * pCryptoInterface,
-                     const uint8_t * pInput,
-                     size_t inputLen,
-                     uint8_t * pOutput,
-                     size_t outputLen )
+int32_t hmacData( HmacContext_t * pHmacContext,
+                  const char * pData,
+                  size_t dataLen )
 {
+    int32_t returnStatus = -1;
+    size_t i = 0U;
+    const SigV4CryptoInterface_t * pCryptoInterface = NULL;
 
+    assert( pHmacContext != NULL );
+    assert( pHmacContext->key != NULL );
+    assert( pHmacContext->pCryptoInterface != NULL );
+    /* Note that we must have a block-sized derived key before calling this function. */
+    assert( pHmacContext->keyLen == pHmacContext->pCryptoInterface->hashBlockLen );
+    assert( pHmacContext->pCryptoInterface->hashInit != NULL );
+    assert( pHmacContext->pCryptoInterface->hashUpdate != NULL );
+    assert( pHmacContext->pCryptoInterface->hashFinal != NULL );
+
+    pCryptoInterface = pHmacContext->pCryptoInterface;
+
+    for( i = 0; i < pCryptoInterface->hashBlockLen; ++i )
+    {
+        /* XOR the key with the ipad. */
+        pHmacContext->key[ i ] ^= ( char ) 0x36;
+    }
+
+    returnStatus = pCryptoInterface->hashInit( pCryptoInterface->pHashContext );
+
+    if( returnStatus == 0 )
+    {
+        /* Hash the inner-padded key. */
+        returnStatus = pCryptoInterface->hashUpdate( pCryptoInterface->pHashContext,
+                                                     pHmacContext->key,
+                                                     pHmacContext->keyLen );
+    }
+
+    if( ( returnStatus == 0 ) && ( dataLen > 0U ) )
+    {
+        /* Hash the data. */
+        returnStatus = pCryptoInterface->hashUpdate( pCryptoInterface->pHashContext,
+                                                     pData,
+                                                     dataLen );
+    }
+
+    return returnStatus;
+}
+
+/*-----------------------------------------------------------*/
+
+int32_t hmacFinal( HmacContext_t * pHmacContext,
+                   char * pMac,
+                   size_t macLen )
+{
+    int32_t returnStatus = -1;
+    char innerHashDigest[ SIGV4_HASH_MAX_DIGEST_LENGTH ];
+    size_t i = 0U;
+    const SigV4CryptoInterface_t * pCryptoInterface = NULL;
+
+    assert( pHmacContext != NULL );
+    assert( pHmacContext->key != NULL );
+    assert( pHmacContext->pCryptoInterface != NULL );
+    /* Note that we must have a block-sized derived key before calling this function. */
+    assert( pHmacContext->keyLen == pHmacContext->pCryptoInterface->hashBlockLen );
+    assert( pHmacContext->pCryptoInterface->hashInit != NULL );
+    assert( pHmacContext->pCryptoInterface->hashUpdate != NULL );
+    assert( pHmacContext->pCryptoInterface->hashFinal != NULL );
+
+    pCryptoInterface = pHmacContext->pCryptoInterface;
+
+    /* Write the inner hash. */
+    returnStatus = pCryptoInterface->hashFinal( pCryptoInterface->pHashContext,
+                                                innerHashDigest,
+                                                pCryptoInterface->hashDigestLen );
+
+    if( returnStatus == 0 )
+    {
+        /* Create the outer-padded key. */
+        for( i = 0; i < pHmacContext->keyLen; ++i )
+        {
+            pHmacContext->key[ i ] ^= ( char ) ( 0x36 ^ 0x5C );
+        }
+
+        returnStatus = pCryptoInterface->hashInit( pCryptoInterface->pHashContext );
+    }
+
+    if( returnStatus == 0 )
+    {
+        /* Update hash using the inner-padded key. */
+        returnStatus = pCryptoInterface->hashUpdate( pCryptoInterface->pHashContext,
+                                                     pHmacContext->key,
+                                                     pHmacContext->keyLen );
+    }
+
+    if( returnStatus == 0 )
+    {
+        /* Update hash using the inner digest. */
+        returnStatus = pCryptoInterface->hashUpdate( pCryptoInterface->pHashContext,
+                                                     innerHashDigest,
+                                                     pCryptoInterface->hashDigestLen );
+    }
+
+    if( returnStatus == 0 )
+    {
+        /* Write the final HMAC value. */
+        returnStatus = pCryptoInterface->hashFinal( pCryptoInterface->pHashContext,
+                                                    pMac,
+                                                    macLen );
+    }
+
+    return returnStatus;
+}
+
+int32_t completeHmac( const char * pKey,
+                      size_t keyLen,
+                      const char * pData,
+                      size_t dataLen,
+                      char * pOutput,
+                      size_t outputLen,
+                      const SigV4CryptoInterface_t * pCryptoInterface )
+{
+    int32_t returnStatus = -1;
+    HmacContext_t hmacContext = { 0 };
+
+    hmacContext.pCryptoInterface = pCryptoInterface;
+
+    returnStatus = hmacKey( &hmacContext, pKey, keyLen );
+
+    if( returnStatus == 0 )
+    {
+        returnStatus = hmacData( &hmacContext, pData, dataLen );
+    }
+
+    if( returnStatus == 0 )
+    {
+        returnStatus = hmacFinal( &hmacContext, pOutput, outputLen );
+    }
+
+    return returnStatus;
 }
 
 SigV4Status_t SigV4_AwsIotDateToIso8601( const char * pDate,

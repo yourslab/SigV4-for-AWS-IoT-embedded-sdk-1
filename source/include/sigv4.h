@@ -64,10 +64,6 @@
 #define SIGV4_EXPECTED_LEN_RFC_3339                 20U                                  /**< Length of RFC 3339 date input. */
 #define SIGV4_EXPECTED_LEN_RFC_5322                 29U                                  /**< Length of RFC 5322 date input. */
 
-#define SIGV4_HTTP_PATH_IS_CANONICAL_FLAG     0x1
-#define SIGV4_HTTP_QUERY_IS_CANONICAL_FLAG    0x2
-#define SIGV4_HTTP_HEADERS_ARE_CANONICAL_FLAG 0x4
-#define SIGV4_HTTP_ALL_ARE_CANONICAL_FLAG     0x8
 /** @}*/
 
 /**
@@ -158,13 +154,12 @@ typedef enum SigV4Status
     SigV4ISOFormattingError,
 
     /**
-     * @brief An error occurred while parsing the URI.
+     * @brief The maximum number of query parameters was exceeded while parsing
+     * the query string input parameter.
      *
      * Functions that may return this value:
      * - #SigV4_GenerateHTTPAuthorization
      */
-    SigV4UriParsingError,
-
     SigV4MaxQueryPairCountExceeded
 } SigV4Status_t;
 
@@ -196,7 +191,7 @@ typedef struct SigV4CryptoInterface
      * @return Zero on success, all other return values are failures.
      */
     int32_t ( * hashUpdate )( void * pHashContext,
-                              const uint8_t * pInput,
+                              const char * pInput,
                               size_t inputLen );
 
     /**
@@ -213,13 +208,15 @@ typedef struct SigV4CryptoInterface
      * @return Zero on success, all other return values are failures.
      */
     int32_t ( * hashFinal )( void * pHashContext,
-                             uint8_t * pOutput,
+                             char * pOutput,
                              size_t outputLen );
 
     /**
      * @brief Context for the hashInit, hashUpdate, and hashFinal interfaces.
      */
     void * pHashContext;
+    size_t hashBlockLen;
+    size_t hashDigestLen;
 } SigV4CryptoInterface_t;
 
 /**
