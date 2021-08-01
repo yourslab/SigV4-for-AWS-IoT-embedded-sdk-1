@@ -151,8 +151,8 @@ static void intToAscii( int32_t value,
  * @return SigV4InsufficientMemory if the length of `pCredScope` was insufficient to
  * fit the actual credential scope, SigV4Success otherwise.
  */
-static SigV4Status_t writeCredentialScope( SigV4Parameters_t * pSigV4Params,
-                                           SigV4String_t * pCredScope );
+static SigV4Status_t generateCredentialScope( SigV4Parameters_t * pSigV4Params,
+                                              SigV4String_t * pCredScope );
 
 /**
  * @brief Check if the date represents a valid leap year day.
@@ -589,23 +589,23 @@ static void hexEncode( SigV4String_t * pInputStr,
 
 /*-----------------------------------------------------------*/
 
-static SigV4Status_t writeCredentialScope( SigV4Parameters_t * pSigV4Params,
-                                           SigV4String_t * pCredScope )
+static SigV4Status_t generateCredentialScope( SigV4Parameters_t * pSigV4Params,
+                                              SigV4String_t * pCredScope )
 {
-    SigV4Status_t returnStatus = SigV4InvalidParameter;
+    SigV4Status_t returnStatus = SigV4Success;
     char * pBufWrite = NULL;
     size_t sizeNeeded = 0U;
 
     assert( pSigV4Params != NULL );
     assert( pSigV4Params->pCredentials != NULL );
     assert( pSigV4Params->pCredentials->pAccessKeyId != NULL );
-    assert( pSigV4Params->pCredentials->accessKeyLen >= 16 );
+    assert( pSigV4Params->pCredentials->accessKeyIdLen >= 16 );
     assert( pSigV4Params->pRegion != NULL );
     assert( pSigV4Params->pService != NULL );
     assert( pCredScope != NULL );
     assert( pCredScope->pData != NULL );
 
-    sizeNeeded = pSigV4Params->pCredentials->accessKeyLen +                  \
+    sizeNeeded = pSigV4Params->pCredentials->accessKeyIdLen +                \
                  CREDENTIAL_SCOPE_SEPARATOR_LEN + ISO_DATE_SCOPE_LEN +       \
                  CREDENTIAL_SCOPE_SEPARATOR_LEN + pSigV4Params->regionLen +  \
                  CREDENTIAL_SCOPE_SEPARATOR_LEN + pSigV4Params->serviceLen + \
@@ -623,8 +623,8 @@ static SigV4Status_t writeCredentialScope( SigV4Parameters_t * pSigV4Params,
     if( returnStatus == SigV4Success )
     {
         /* Concatenate access key ID. */
-        ( void ) strncpy( pBufWrite, pSigV4Params->pCredentials->pAccessKeyId, pSigV4Params->pCredentials->accessKeyLen );
-        pBufWrite += pSigV4Params->pCredentials->accessKeyLen;
+        ( void ) strncpy( pBufWrite, pSigV4Params->pCredentials->pAccessKeyId, pSigV4Params->pCredentials->accessKeyIdLen );
+        pBufWrite += pSigV4Params->pCredentials->accessKeyIdLen;
 
         *pBufWrite = CREDENTIAL_SCOPE_SEPARATOR;
         pBufWrite += CREDENTIAL_SCOPE_SEPARATOR_LEN;
@@ -653,6 +653,8 @@ static SigV4Status_t writeCredentialScope( SigV4Parameters_t * pSigV4Params,
         /* Concatenate terminator. */
         ( void ) strncpy( pBufWrite, CREDENTIAL_SCOPE_TERMINATOR, CREDENTIAL_SCOPE_TERMINATOR_LEN );
         pBufWrite += CREDENTIAL_SCOPE_TERMINATOR_LEN;
+
+        pCredScope->dataLen = sizeNeeded;
     }
 
     return returnStatus;
@@ -1188,11 +1190,6 @@ static SigV4Status_t verifySigV4Parameters( const SigV4Parameters_t * pParams )
         LogError( ( "Parameter check failed: pParams->pHttpParameters->pHttpMethod is NULL." ) );
         returnStatus = SigV4InvalidParameter;
     }
-    else if( pParams->pHttpParameters->pPath == NULL )
-    {
-        LogError( ( "Parameter check failed: pParams->pHttpParameters->pPath is NULL." ) );
-        returnStatus = SigV4InvalidParameter;
-    }
     else if( pParams->pHttpParameters->pQuery == NULL )
     {
         LogError( ( "Parameter check failed: pParams->pHttpParameters->pQuery is NULL." ) );
@@ -1208,6 +1205,42 @@ static SigV4Status_t verifySigV4Parameters( const SigV4Parameters_t * pParams )
 }
 
 /*-----------------------------------------------------------*/
+
+static int32_t hash( const SigV4CryptoInterface_t * pCryptoInterface,
+                     const uint8_t * pInput,
+                     size_t inputLen,
+                     uint8_t * pOutput,
+                     size_t outputLen )
+{
+    int32_t hashStatus = -1;
+
+    hashStatus = pCryptoInterface->hashInit( pCryptoInterface->pHashContext );
+
+    if( hashStatus == 0 )
+    {
+        hashStatus = pCryptoInterface->hashUpdate( pCryptoInterface->pHashContext,
+                                                   pInput, inputLen );
+    }
+
+    if( hashStatus == 0 )
+    {
+        hashStatus = pCryptoInterface->hashFinal( pCryptoInterface->pHashContext,
+                                                  pOutput, outputLen );
+    }
+
+    return returnStatus;
+}
+
+/*-----------------------------------------------------------*/
+
+static int32_t hash( const SigV4CryptoInterface_t * pCryptoInterface,
+                     const uint8_t * pInput,
+                     size_t inputLen,
+                     uint8_t * pOutput,
+                     size_t outputLen )
+{
+
+}
 
 SigV4Status_t SigV4_AwsIotDateToIso8601( const char * pDate,
                                          size_t dateLen,
@@ -1298,19 +1331,38 @@ SigV4Status_t SigV4_GenerateHTTPAuthorization( const SigV4Parameters_t * pParams
     canonicalContext.bufRemaining = SIGV4_PROCESSING_BUFFER_LENGTH;
 
     /*returnStatus = verifySigV4Parameters( pParams ); */
-
     if( returnStatus == SigV4Success )
-      {
-       returnStatus = generateCanonicalQuery( pParams->pHttpParameters->pQuery, pParams->pHttpParameters->queryLen, &canonicalContext );
-       printf( "Return status is %d", returnStatus );
-       printf( "Canonical query is %.*s\n", SIGV4_PROCESSING_BUFFER_LENGTH - canonicalContext.bufRemaining, canonicalContext.pBufProcessing );
-     }
+    {
+        returnStatus = generateCanonicalQuery( pParams->pHttpParameters->pQuery, pParams->pHttpParameters->queryLen, &canonicalContext );
+        printf( "Return status is %d", returnStatus );
+        printf( "Canonical query is %.*s\n", SIGV4_PROCESSING_BUFFER_LENGTH - canonicalContext.bufRemaining, canonicalContext.pBufProcessing );
+    }
 
     if( returnStatus == SigV4Success )
     {
         returnStatus = generateCanonicalURI( pParams->pHttpParameters->pPath, pParams->pHttpParameters->pathLen, false, &canonicalContext );
         printf( "Return status is %d", returnStatus );
         printf( "Canonical query is %.*s\n", SIGV4_PROCESSING_BUFFER_LENGTH - canonicalContext.bufRemaining, canonicalContext.pBufProcessing );
+    }
+
+    if( returnStatus == SigV4Success )
+    {
+        SigV4String_t credScope;
+        credScope.pData = canonicalContext.pBufCur;
+        credScope.dataLen = canonicalContext.bufRemaining;
+        returnStatus = generateCredentialScope( pParams, &credScope );
+
+        if( returnStatus == SigV4Success )
+        {
+            canonicalContext.bufRemaining -= credScope.dataLen;
+        }
+
+        printf( "Return status is %d", returnStatus );
+        printf( "Canonical query is %.*s\n", SIGV4_PROCESSING_BUFFER_LENGTH - canonicalContext.bufRemaining, canonicalContext.pBufProcessing );
+    }
+
+    if( returnStatus == SigV4Success )
+    {
     }
 
     return returnStatus;

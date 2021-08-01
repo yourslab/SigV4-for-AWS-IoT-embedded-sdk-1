@@ -63,6 +63,11 @@
 #define SIGV4_ISO_STRING_LEN                        16U                                  /**< Length of ISO 8601 date string. */
 #define SIGV4_EXPECTED_LEN_RFC_3339                 20U                                  /**< Length of RFC 3339 date input. */
 #define SIGV4_EXPECTED_LEN_RFC_5322                 29U                                  /**< Length of RFC 5322 date input. */
+
+#define SIGV4_HTTP_PATH_IS_CANONICAL_FLAG     0x1
+#define SIGV4_HTTP_QUERY_IS_CANONICAL_FLAG    0x2
+#define SIGV4_HTTP_HEADERS_ARE_CANONICAL_FLAG 0x4
+#define SIGV4_HTTP_ALL_ARE_CANONICAL_FLAG     0x8
 /** @}*/
 
 /**
@@ -288,7 +293,7 @@ typedef struct SigV4Credentials
      * @brief The pAccessKeyId MUST be at least 16 characters long.
      */
     const char * pAccessKeyId;
-    size_t accessKeyLen; /**< @brief Length of pAccessKeyId. */
+    size_t accessKeyIdLen; /**< @brief Length of pAccessKeyId. */
 
     /**
      * @brief The pSecretAccessKey MUST be at least 40 characters long.
@@ -335,6 +340,9 @@ typedef struct SigV4Parameters
      * always 16 characters long.
      */
     const char * pDateIso8601;
+
+    const char * pAlgorithm;
+    size_t algorithm;
 
     /**
      * @brief The target AWS region for the request. Please see
