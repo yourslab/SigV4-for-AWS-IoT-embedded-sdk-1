@@ -1330,7 +1330,6 @@ int32_t hmacKey( HmacContext_t * pHmacContext,
 
     assert( pHmacContext != NULL );
     assert( pHmacContext->key != NULL );
-    assert( pHmacContext->keyLen == 0 );
     assert( pHmacContext->pCryptoInterface != NULL );
     assert( pHmacContext->pCryptoInterface->hashInit != NULL );
     assert( pHmacContext->pCryptoInterface->hashUpdate != NULL );
@@ -1340,40 +1339,37 @@ int32_t hmacKey( HmacContext_t * pHmacContext,
 
     returnStatus = pCryptoInterface->hashInit( pCryptoInterface->pHashContext );
 
-    if( keyLen <= pCryptoInterface->hashBlockLen )
+    if( pHmacContext->keyLen + keyLen <= pCryptoInterface->hashBlockLen )
     {
         /* The key fits into the block so just use it as is. */
         ( void ) memcpy( pHmacContext->key, pKey, keyLen );
     }
     else if( returnStatus == 0 )
     {
-        /* Hash down the key in order to create a block-sized derived key. */
-        returnStatus = pCryptoInterface->hashUpdate( pCryptoInterface->pHashContext,
-                                                     pKey,
-                                                     keyLen );
+        /* Initialize the hash along with the existing key data. */
+        if( pHmacContext->keyLen <= pCryptoInterface->hashBlockLen )
+        {
+            returnStatus = pCryptoInterface->hashInit( pCryptoInterface->pHashContext );
 
+            if( returnStatus == 0 )
+            {
+                returnStatus = pCryptoInterface->hashUpdate( pCryptoInterface->pHashContext,
+                                                             pHmacContext->key,
+                                                             pHmacContext->keyLen );
+            }
+        }
+
+        /* Hash down the key in order to create a block-sized derived key. */
         if( returnStatus == 0 )
         {
-            returnStatus = pCryptoInterface->hashFinal( pCryptoInterface->pHashContext,
-                                                        pHmacContext->key,
-                                                        pHmacContext->keyLen );
-            keyLen = pCryptoInterface->hashDigestLen;
+            returnStatus = pCryptoInterface->hashUpdate( pCryptoInterface->pHashContext,
+                                                         pKey,
+                                                         keyLen );
         }
     }
     else
     {
         /* Empty else. */
-    }
-
-    assert( keyLen <= pCryptoInterface->hashBlockLen );
-
-    if( returnStatus == 0 )
-    {
-        /* Zero pad to the right so that the key has the same size as the block size. */
-        ( void ) memset( ( void * ) ( pHmacContext->key + keyLen ),
-                         0,
-                         pCryptoInterface->hashBlockLen - keyLen );
-        pHmacContext->keyLen = pCryptoInterface->hashBlockLen;
     }
 
     return returnStatus;
@@ -1385,28 +1381,45 @@ int32_t hmacData( HmacContext_t * pHmacContext,
                   const char * pData,
                   size_t dataLen )
 {
-    int32_t returnStatus = -1;
+    int32_t returnStatus = 0;
     size_t i = 0U;
     const SigV4CryptoInterface_t * pCryptoInterface = NULL;
 
     assert( pHmacContext != NULL );
     assert( pHmacContext->key != NULL );
     assert( pHmacContext->pCryptoInterface != NULL );
-    /* Note that we must have a block-sized derived key before calling this function. */
-    assert( pHmacContext->keyLen == pHmacContext->pCryptoInterface->hashBlockLen );
     assert( pHmacContext->pCryptoInterface->hashInit != NULL );
     assert( pHmacContext->pCryptoInterface->hashUpdate != NULL );
     assert( pHmacContext->pCryptoInterface->hashFinal != NULL );
 
     pCryptoInterface = pHmacContext->pCryptoInterface;
 
-    for( i = 0; i < pCryptoInterface->hashBlockLen; ++i )
+    if( pHmacContext->keyLen > pCryptoInterface->hashBlockLen )
     {
-        /* XOR the key with the ipad. */
-        pHmacContext->key[ i ] ^= ( char ) 0x36;
+        /* Store the final block-sized derived key. */
+        returnStatus = pCryptoInterface->hashFinal( pCryptoInterface->pHashContext,
+                                                    pHmacContext->key,
+                                                    pCryptoInterface->hashBlockLen );
+    }
+    else
+    {
+        /* Zero pad to the right so that the key has the same size as the block size. */
+        ( void ) memset( ( void * ) ( pHmacContext->key + pHmacContext->keyLen ),
+                         0,
+                         pCryptoInterface->hashBlockLen - pHmacContext->keyLen );
     }
 
-    returnStatus = pCryptoInterface->hashInit( pCryptoInterface->pHashContext );
+    if( returnStatus == 0 )
+    {
+        pHmacContext->keyLen = pCryptoInterface->hashBlockLen;
+        for( i = 0; i < pCryptoInterface->hashBlockLen; ++i )
+        {
+            /* XOR the key with the ipad. */
+            pHmacContext->key[ i ] ^= ( char ) 0x36;
+        }
+
+        returnStatus = pCryptoInterface->hashInit( pCryptoInterface->pHashContext );
+    }
 
     if( returnStatus == 0 )
     {
@@ -1491,6 +1504,9 @@ int32_t hmacFinal( HmacContext_t * pHmacContext,
                                                     pMac,
                                                     macLen );
     }
+
+    /* Reset the HMAC context. */
+    pHmacContext->keyLen = 0U;
 
     return returnStatus;
 }
@@ -1844,10 +1860,11 @@ SigV4Status_t SigV4_GenerateHTTPAuthorization( const SigV4Parameters_t * pParams
         returnStatus = writeStringToSign( pParams, &canonicalContext );
     }
 
-    /* Write the signing key. */
+    /* Write the signing key. The is done by computing the following function:
+     * HMAC(HMAC(HMAC(HMAC("AWS4" + kSecret,"20150830"),"us-east-1"),"iam"),"aws4_request") */
     if( returnStatus == SigV4Success )
     {
-        
+        returnStatus = hmacKey()
     }
 
     if( returnStatus == SigV4Success )
