@@ -1396,20 +1396,19 @@ int32_t hmacData( HmacContext_t * pHmacContext,
         returnStatus = pCryptoInterface->hashFinal( pCryptoInterface->pHashContext,
                                                     pHmacContext->key,
                                                     pCryptoInterface->hashBlockLen );
+        pHmacContext->keyLen = pCryptoInterface->hashDigestLen;
     }
-    else
+
+    assert( pCryptoInterface->hashBlockLen >= pHmacContext->keyLen );
+
+    if( returnStatus == 0 )
     {
         /* Zero pad to the right so that the key has the same size as the block size. */
         ( void ) memset( ( void * ) ( pHmacContext->key + pHmacContext->keyLen ),
                          0,
                          pCryptoInterface->hashBlockLen - pHmacContext->keyLen );
-    }
 
-    if( returnStatus == 0 )
-    {
-        pHmacContext->keyLen = pCryptoInterface->hashBlockLen;
-
-        for( i = 0; i < pCryptoInterface->hashBlockLen; ++i )
+        for( i = 0U; i < pCryptoInterface->hashBlockLen; i++ )
         {
             /* XOR the key with the ipad. */
             pHmacContext->key[ i ] ^= ( char ) 0x36;
@@ -1420,10 +1419,10 @@ int32_t hmacData( HmacContext_t * pHmacContext,
 
     if( returnStatus == 0 )
     {
-        /* Hash the inner-padded key. */
+        /* Hash the inner-padded block-sized key. */
         returnStatus = pCryptoInterface->hashUpdate( pCryptoInterface->pHashContext,
                                                      pHmacContext->key,
-                                                     pHmacContext->keyLen );
+                                                     pCryptoInterface->hashBlockLen );
     }
 
     if( ( returnStatus == 0 ) && ( dataLen > 0U ) )
@@ -1452,7 +1451,6 @@ int32_t hmacFinal( HmacContext_t * pHmacContext,
     assert( pHmacContext->key != NULL );
     assert( pHmacContext->pCryptoInterface != NULL );
     /* Note that we must have a block-sized derived key before calling this function. */
-    assert( pHmacContext->keyLen == pHmacContext->pCryptoInterface->hashBlockLen );
     assert( pHmacContext->pCryptoInterface->hashInit != NULL );
     assert( pHmacContext->pCryptoInterface->hashUpdate != NULL );
     assert( pHmacContext->pCryptoInterface->hashFinal != NULL );
@@ -1470,7 +1468,7 @@ int32_t hmacFinal( HmacContext_t * pHmacContext,
          * the inner-padded key then XOR with opad. XOR is associative,
          * so one way to do this is by performing XOR on each byte of the
          * inner-padded key with (0x36 ^ 0x5c) = (ipad ^ opad) = 0x6a.  */
-        for( i = 0; i < pHmacContext->keyLen; ++i )
+        for( i = 0U; i < pCryptoInterface->hashBlockLen; i++ )
         {
             pHmacContext->key[ i ] ^= ( char ) ( 0x6a );
         }
@@ -1480,10 +1478,10 @@ int32_t hmacFinal( HmacContext_t * pHmacContext,
 
     if( returnStatus == 0 )
     {
-        /* Update hash using the inner-padded key. */
+        /* Update hash using the outer-padded key. */
         returnStatus = pCryptoInterface->hashUpdate( pCryptoInterface->pHashContext,
                                                      pHmacContext->key,
-                                                     pHmacContext->keyLen );
+                                                     pCryptoInterface->hashBlockLen );
     }
 
     if( returnStatus == 0 )
@@ -1848,7 +1846,7 @@ SigV4Status_t SigV4_GenerateHTTPAuthorization( const SigV4Parameters_t * pParams
     CanonicalContext_t canonicalContext;
     char * pPath = NULL;
     size_t pathLen = 0U, encodedLen = 0U;
-    HmacContext_t hmacContext;
+    HmacContext_t hmacContext = { 0 };
     SigV4String_t signingKey;
 
     /*returnStatus = verifySigV4Parameters( pParams ); */
@@ -1974,7 +1972,7 @@ SigV4Status_t SigV4_GenerateHTTPAuthorization( const SigV4Parameters_t * pParams
     SigV4String_t hexEncodedHmac;
     originalHmac.pData = signingKey.pData;
     originalHmac.dataLen = pParams->pCryptoInterface->hashDigestLen;
-    hexEncodedHmac.pData = (char *)canonicalContext.pBufProcessing;
+    hexEncodedHmac.pData = ( char * ) canonicalContext.pBufProcessing;
     hexEncodedHmac.dataLen = 64;
 
     if( returnStatus == SigV4Success )
