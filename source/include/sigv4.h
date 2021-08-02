@@ -50,6 +50,7 @@
  *  @{
  */
 #define SIGV4_AWS4_HMAC_SHA256                      "AWS4-HMAC-SHA256"                   /**< AWS identifier for SHA256 signing algorithm. */
+#define SIGV4_AWS4_HMAC_SHA256_LENGTH               (sizeof(SIGV4_AWS4_HMAC_SHA256)-1U)                   /**< AWS identifier for SHA256 signing algorithm. */
 #define SIGV4_HTTP_X_AMZ_DATE_HEADER                "x-amz-date"                         /**< AWS identifier for HTTP date header. */
 #define SIGV4_HTTP_X_AMZ_SECURITY_TOKEN_HEADER      "x-amz-security-token"               /**< AWS identifier for security token. */
 

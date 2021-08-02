@@ -602,6 +602,15 @@ static SigV4Status_t lowercaseHexEncode( const SigV4String_t * pInputStr,
 
 /*-----------------------------------------------------------*/
 
+static size_t sizeNeededForCredentialScope( const SigV4Parameters_t * pSigV4Params )
+{
+    return ISO_DATE_SCOPE_LEN +              \
+           CREDENTIAL_SCOPE_SEPARATOR_LEN + pSigV4Params->regionLen +         \
+           CREDENTIAL_SCOPE_SEPARATOR_LEN + pSigV4Params->serviceLen +        \
+           CREDENTIAL_SCOPE_SEPARATOR_LEN + CREDENTIAL_SCOPE_TERMINATOR_LEN + \
+           LINEFEED_CHAR_LEN;
+}
+
 static SigV4Status_t generateCredentialScope( const SigV4Parameters_t * pSigV4Params,
                                               SigV4String_t * pCredScope )
 {
@@ -611,37 +620,25 @@ static SigV4Status_t generateCredentialScope( const SigV4Parameters_t * pSigV4Pa
 
     assert( pSigV4Params != NULL );
     assert( pSigV4Params->pCredentials != NULL );
-    assert( pSigV4Params->pCredentials->pAccessKeyId != NULL );
-    assert( pSigV4Params->pCredentials->accessKeyIdLen >= 16 );
     assert( pSigV4Params->pRegion != NULL );
     assert( pSigV4Params->pService != NULL );
     assert( pCredScope != NULL );
     assert( pCredScope->pData != NULL );
 
-    sizeNeeded = pSigV4Params->pCredentials->accessKeyIdLen +                \
-                 CREDENTIAL_SCOPE_SEPARATOR_LEN + ISO_DATE_SCOPE_LEN +       \
-                 CREDENTIAL_SCOPE_SEPARATOR_LEN + pSigV4Params->regionLen +  \
-                 CREDENTIAL_SCOPE_SEPARATOR_LEN + pSigV4Params->serviceLen + \
-                 CREDENTIAL_SCOPE_SEPARATOR_LEN + CREDENTIAL_SCOPE_TERMINATOR_LEN;
+    sizeNeeded = sizeNeededForCredentialScope( pSigV4Params );
 
     pBufWrite = pCredScope->pData;
 
     if( pCredScope->dataLen < sizeNeeded )
     {
         returnStatus = SigV4InsufficientMemory;
-        LogError( ( "Insufficient memory provided to write the credential scope." ) );
+        LogError( ( "Insufficient memory provided to write the credential scope, bytesExceeded=%zu",
+                    sizeNeeded - pCredScope->dataLen ) );
     }
 
     /* Each concatenated component is separated by a '/' character. */
     if( returnStatus == SigV4Success )
     {
-        /* Concatenate access key ID. */
-        ( void ) memcpy( pBufWrite, pSigV4Params->pCredentials->pAccessKeyId, pSigV4Params->pCredentials->accessKeyIdLen );
-        pBufWrite += pSigV4Params->pCredentials->accessKeyIdLen;
-
-        *pBufWrite = CREDENTIAL_SCOPE_SEPARATOR;
-        pBufWrite += CREDENTIAL_SCOPE_SEPARATOR_LEN;
-
         /* Concatenate first 8 characters from the provided ISO 8601 string (YYYYMMDD). */
         ( void ) memcpy( pBufWrite, pSigV4Params->pDateIso8601, ISO_DATE_SCOPE_LEN );
         pBufWrite += ISO_DATE_SCOPE_LEN;
@@ -666,6 +663,10 @@ static SigV4Status_t generateCredentialScope( const SigV4Parameters_t * pSigV4Pa
         /* Concatenate terminator. */
         ( void ) memcpy( pBufWrite, CREDENTIAL_SCOPE_TERMINATOR, CREDENTIAL_SCOPE_TERMINATOR_LEN );
         pBufWrite += CREDENTIAL_SCOPE_TERMINATOR_LEN;
+
+        /* Concatenate linefeed character. */
+        *pBufWrite = LINEFEED_CHAR;
+        pBufWrite += LINEFEED_CHAR_LEN;
 
         pCredScope->dataLen = sizeNeeded;
     }
@@ -922,7 +923,7 @@ static SigV4Status_t generateCredentialScope( const SigV4Parameters_t * pSigV4Pa
 
                 if( returnStatus == SigV4Success )
                 {
-                    ( void ) memmove( pBufLoc, pBufLoc + encodedLen, doubleEncodedLen );
+                    ( void ) memcpy( pBufLoc, pBufLoc + encodedLen, doubleEncodedLen );
                     pBufLoc += doubleEncodedLen;
                     pCanonicalRequest->bufRemaining -= doubleEncodedLen;
                 }
@@ -1502,7 +1503,7 @@ static SigV4Status_t writeLineToCanonicalRequest( const char * pLine,
 
     if( pCanonicalContext->bufRemaining < lineLen + LINEFEED_CHAR_LEN )
     {
-        LogError( ( "Insufficient space in processing buffer. "
+        LogError( ( "Insufficient space in processing buffer for canonical request. "
                     "Increase `SIGV4_PROCESSING_BUFFER_LENGTH` to fix, bytesExceeded=%zu.",
                     lineLen - pCanonicalContext->bufRemaining ) );
         returnStatus = SigV4InsufficientMemory;
@@ -1636,6 +1637,9 @@ SigV4Status_t SigV4_GenerateHTTPAuthorization( const SigV4Parameters_t * pParams
 {
     SigV4Status_t returnStatus = SigV4Success;
     CanonicalContext_t canonicalContext;
+    char * pAlgorithm = NULL;
+    char* pPath = NULL;
+    size_t algorithmLen = 0U, pathLen = 0U;
 
     /*returnStatus = verifySigV4Parameters( pParams ); */
 
@@ -1650,33 +1654,51 @@ SigV4Status_t SigV4_GenerateHTTPAuthorization( const SigV4Parameters_t * pParams
                                                     &canonicalContext );
     }
 
+    /* Set defaults for path and algorithm. */
+    if( ( pParams->pHttpParameters->pPath == NULL ) ||
+        ( pParams->pHttpParameters->pathLen == 0U ) )
+    {
+        /* If the absolute path is empty, use a forward slash (/). */
+        pPath = HTTP_EMPTY_PATH;
+        pathLen = HTTP_EMPTY_PATH_LEN;
+    }
+    else
+    {
+        pPath = pParams->pHttpParameters->pPath;
+        pathLen = pParams->pHttpParameters->pathLen;
+    }
+
+    if( ( pParams->pAlgorithm == NULL ) || ( pParams->algorithmLen == 0 ) )
+    {
+        /* The default algorithm is AWS4-HMAC-SHA256. */
+        pAlgorithm = SIGV4_AWS4_HMAC_SHA256;
+        algorithmLen = SIGV4_AWS4_HMAC_SHA256_LENGTH;
+    }
+    else
+    {
+        pAlgorithm = pParams->pAlgorithm;
+        algorithmLen = pParams->algorithmLen;
+    }
+
     if( returnStatus == SigV4Success )
     {
-        if( ( pParams->pHttpParameters->pPath == NULL ) ||
-            ( pParams->pHttpParameters->pathLen == 0U ) )
-        {
-            /* If the absolute path is empty, use a forward slash (/). */
-            pParams->pHttpParameters->pPath = HTTP_EMPTY_PATH;
-            pParams->pHttpParameters->pathLen = HTTP_EMPTY_PATH_LEN;
-        }
-
         /* Write the URI to the canonical request. */
         if( pParams->pHttpParameters->flags & SIGV4_HTTP_PATH_IS_CANONICAL_FLAG )
         {
             /* URI is already canonicalized, so just write it to the buffer as is. */
-            returnStatus = writeLineToCanonicalRequest( pParams->pHttpParameters->pPath,
-                                                        pParams->pHttpParameters->pathLen,
+            returnStatus = writeLineToCanonicalRequest( pPath,
+                                                        pathLen,
                                                         &canonicalContext );
         }
         else if( ( pParams->serviceLen >= S3_SERVICE_NAME_LEN ) &&
                  ( strncmp( pParams->pService, S3_SERVICE_NAME, S3_SERVICE_NAME_LEN ) == 0 ) )
         {
             /* S3 is the only service in which the URI must only be encoded once. */
-            returnStatus = generateCanonicalURI( pParams->pHttpParameters->pPath, pParams->pHttpParameters->pathLen, false, &canonicalContext );
+            returnStatus = generateCanonicalURI( pPath, pathLen, false, &canonicalContext );
         }
         else
         {
-            returnStatus = generateCanonicalURI( pParams->pHttpParameters->pPath, pParams->pHttpParameters->pathLen, true, &canonicalContext );
+            returnStatus = generateCanonicalURI( pPath, pathLen, true, &canonicalContext );
         }
     }
 
@@ -1733,17 +1755,67 @@ SigV4Status_t SigV4_GenerateHTTPAuthorization( const SigV4Parameters_t * pParams
     if( returnStatus == SigV4Success )
     {
         size_t encodedLen = canonicalContext.bufRemaining;
-        char * pBufStart = (char *)canonicalContext.pBufProcessing;
+        char * pBufStart = ( char * ) canonicalContext.pBufProcessing;
+
         returnStatus = completeHashAndHexEncode( pBufStart,
-                                                 (size_t) (canonicalContext.pBufCur - pBufStart),
+                                                 ( size_t ) ( canonicalContext.pBufCur - pBufStart ),
                                                  canonicalContext.pBufCur + 1,
                                                  &encodedLen,
                                                  pParams->pCryptoInterface );
+
         if( returnStatus == SigV4Success )
         {
-            (void) memmove( pBufStart, canonicalContext.pBufCur + 1, encodedLen );
-            canonicalContext.pBufCur = pBufStart;
-            canonicalContext.bufRemaining = SIGV4_PROCESSING_BUFFER_LENGTH - encodedLen;
+            /* Note that the credential scope size calculation already
+             * accounts for the linefeed. */
+            size_t sizeNeededBeforeHash = algorithmLen + LINEFEED_CHAR_LEN + \
+                                          SIGV4_ISO_STRING_LEN + LINEFEED_CHAR_LEN +  \
+                                          sizeNeededForCredentialScope( pParams );
+
+            /* Check if there is enough space for the string to sign. */
+            if( sizeNeededBeforeHash + ( pParams->pCryptoInterface->hashDigestLen * 2 ) >
+                SIGV4_PROCESSING_BUFFER_LENGTH )
+            {
+                LogError( ( "Insufficient space in processing buffer for string to sign. "
+                            "Increase `SIGV4_PROCESSING_BUFFER_LENGTH` to fix, bytesExceeded=%zu.",
+                            sizeNeededBeforeHash + ( pParams->pCryptoInterface->hashDigestLen * 2 ) - \
+                            SIGV4_PROCESSING_BUFFER_LENGTH ) );
+                returnStatus = SigV4InsufficientMemory;
+            }
+            else
+            {
+                /* Copy the hash of the canonical request to where it will be in the string to sign. */
+                ( void ) memmove( pBufStart + sizeNeededBeforeHash, canonicalContext.pBufCur + 1, encodedLen );
+                canonicalContext.pBufCur = pBufStart + sizeNeededBeforeHash + encodedLen;
+                canonicalContext.bufRemaining = SIGV4_PROCESSING_BUFFER_LENGTH - encodedLen - sizeNeededBeforeHash;
+            }
+        }
+
+        if( returnStatus == SigV4Success )
+        {
+            SigV4String_t credentialScope;
+            char * pAlgorithm = NULL;
+            size_t algorithmLen = 0U;
+
+            /* Need to write all substrings that come before the hash in the string to sign. */
+
+            /* Write HMAC and hashing algorithm used for SigV4 authentication. */
+            ( void ) memcpy( pBufStart, pAlgorithm, algorithmLen );
+            pBufStart += algorithmLen;
+
+            *pBufStart = LINEFEED_CHAR;
+            pBufStart += LINEFEED_CHAR_LEN;
+
+            /* Concatenate entire ISO 8601 date string. */
+            ( void ) memcpy( pBufStart, pParams->pDateIso8601, SIGV4_ISO_STRING_LEN );
+            pBufStart += ISO_DATE_SCOPE_LEN;
+
+            *pBufStart = LINEFEED_CHAR;
+            pBufStart += LINEFEED_CHAR_LEN;
+
+            /* Concatenate credential scope. */
+            credentialScope.pData = pBufStart;
+            credentialScope.dataLen = sizeNeededForCredentialScope( pParams );
+            ( void ) generateCredentialScope( pParams, &credentialScope );
         }
     }
 
