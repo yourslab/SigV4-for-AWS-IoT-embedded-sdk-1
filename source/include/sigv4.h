@@ -109,7 +109,7 @@
  *
  * This flag is valid only for #SigV4HttpParameters_t.flags.
  */
-#define SIGV4_HTTP_ALL_ARE_CANONICAL_FLAG        0x8U
+#define SIGV4_HTTP_ALL_ARE_CANONICAL_FLAG        0x7U
 
 /**
  * @ingroup sigv4_enum_types
@@ -160,7 +160,15 @@ typedef enum SigV4Status
      * Functions that may return this value:
      * - #SigV4_GenerateHTTPAuthorization
      */
-    SigV4MaxQueryPairCountExceeded
+    SigV4MaxQueryPairCountExceeded,
+
+    /**
+     * @brief An error occured while performing a hash operation.
+     *
+     * Functions that may return this value:
+     * - #SigV4_GenerateHTTPAuthorization
+     */
+    SigV4HashError,
 } SigV4Status_t;
 
 /**
@@ -238,7 +246,7 @@ typedef struct SigV4HttpParameters
      * - #SIGV4_HTTP_PATH_IS_CANONICAL_FLAG     0x1
      * - #SIGV4_HTTP_QUERY_IS_CANONICAL_FLAG    0x2
      * - #SIGV4_HTTP_HEADERS_ARE_CANONICAL_FLAG 0x4
-     * - #SIGV4_HTTP_ALL_ARE_CANONICAL_FLAG     0x8
+     * - #SIGV4_HTTP_ALL_ARE_CANONICAL_FLAG     0x7
      */
     uint32_t flags;
 
