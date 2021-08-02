@@ -111,6 +111,8 @@
                                                  size_t queryLen,
                                                  CanonicalContext_t * canonicalRequest );
 
+    static SigV4Status_t generateCanonicalRequest( CanonicalContext_t * canonicalRequest );
+
 /**
  * @brief Compare two SigV4 data structures lexicographically, without case-sensitivity.
  *
@@ -243,8 +245,8 @@ static SigV4Status_t verifySigV4Parameters( const SigV4Parameters_t * pParams );
  * @param[in] pInputStr String to encode.
  * @param[out] pHexOutput Hex representation of @p pInputStr.
  */
-static void hexEncode( SigV4String_t * pInputStr,
-                       SigV4String_t * pHexOutput );
+static SigV4Status_t lowercaseHexEncode( const SigV4String_t * pInputStr,
+                                         SigV4String_t * pHexOutput );
 
 /*-----------------------------------------------------------*/
 
@@ -562,9 +564,10 @@ static SigV4Status_t parseDate( const char * pDate,
 /*-----------------------------------------------------------*/
 
 /* Hex digest of provided parameter string. */
-static void hexEncode( SigV4String_t * pInputStr,
-                       SigV4String_t * pHexOutput )
+static SigV4Status_t lowercaseHexEncode( const SigV4String_t * pInputStr,
+                                         SigV4String_t * pHexOutput )
 {
+    SigV4Status_t returnStatus = SigV4Success;
     static const char digitArr[] = "0123456789abcdef";
     char * hex = NULL;
     size_t i = 0U;
@@ -576,15 +579,25 @@ static void hexEncode( SigV4String_t * pInputStr,
 
     hex = pHexOutput->pData;
 
-    for( i = 0; i < pInputStr->dataLen; i++ )
+    if( pHexOutput->dataLen < pInputStr->dataLen * 2 )
     {
-        *hex = digitArr[ ( pInputStr->pData[ i ] & 0xF0 ) >> 4 ];
-        hex++;
-        *hex = digitArr[ ( pInputStr->pData[ i ] & 0x0F ) ];
-        hex++;
+        returnStatus = SigV4InsufficientMemory;
     }
 
-    pHexOutput->dataLen = pInputStr->dataLen * 2;
+    if( returnStatus == SigV4Success )
+    {
+        for( i = 0; i < pInputStr->dataLen; i++ )
+        {
+            *hex = digitArr[ ( pInputStr->pData[ i ] & 0xF0 ) >> 4 ];
+            hex++;
+            *hex = digitArr[ ( pInputStr->pData[ i ] & 0x0F ) ];
+            hex++;
+        }
+
+        pHexOutput->dataLen = pInputStr->dataLen * 2;
+    }
+
+    return returnStatus;
 }
 
 /*-----------------------------------------------------------*/
@@ -912,14 +925,26 @@ static SigV4Status_t generateCredentialScope( const SigV4Parameters_t * pSigV4Pa
                     ( void ) memmove( pBufLoc, pBufLoc + encodedLen, doubleEncodedLen );
                     pBufLoc += doubleEncodedLen;
                     pCanonicalRequest->bufRemaining -= doubleEncodedLen;
-                    pCanonicalRequest->pBufCur = pBufLoc;
                 }
             }
             else
             {
                 pBufLoc += encodedLen;
                 pCanonicalRequest->bufRemaining -= encodedLen;
-                pCanonicalRequest->pBufCur = pBufLoc;
+            }
+        }
+
+        if( returnStatus == SigV4Success )
+        {
+            if( pCanonicalRequest->bufRemaining < 1U )
+            {
+                returnStatus = SigV4InsufficientMemory;
+            }
+            else
+            {
+                *pBufLoc = LINEFEED_CHAR;
+                pCanonicalRequest->pBufCur = pBufLoc + LINEFEED_CHAR_LEN;
+                pCanonicalRequest->bufRemaining -= LINEFEED_CHAR_LEN;
             }
         }
 
@@ -998,20 +1023,21 @@ static SigV4Status_t generateCredentialScope( const SigV4Parameters_t * pSigV4Pa
     {
         SigV4Status_t returnStatus = SigV4Success;
         char * pBufLoc = NULL;
-        size_t encodedLen = 0U, i = 0U;
+        size_t encodedLen = 0U, remainingLen = 0U, i = 0U;
 
         assert( pCanonicalRequest != NULL );
         assert( pCanonicalRequest->pBufCur != NULL );
         assert( pCanonicalRequest->pQueryLoc != NULL );
 
         pBufLoc = pCanonicalRequest->pBufCur;
+        remainingLen = pCanonicalRequest->bufRemaining;
 
         for( i = 0U; i < numberOfParameters; i++ )
         {
             assert( pCanonicalRequest->pQueryLoc[ i ].key.pData != NULL );
             assert( pCanonicalRequest->pQueryLoc[ i ].key.dataLen > 0U );
 
-            encodedLen = pCanonicalRequest->bufRemaining;
+            encodedLen = remainingLen;
             returnStatus = encodeURI( pCanonicalRequest->pQueryLoc[ i ].key.pData,
                                       pCanonicalRequest->pQueryLoc[ i ].key.dataLen,
                                       pBufLoc,
@@ -1022,8 +1048,8 @@ static SigV4Status_t generateCredentialScope( const SigV4Parameters_t * pSigV4Pa
             if( returnStatus == SigV4Success )
             {
                 pBufLoc += encodedLen;
-                pCanonicalRequest->bufRemaining -= encodedLen;
-                encodedLen = pCanonicalRequest->bufRemaining;
+                remainingLen -= encodedLen;
+                encodedLen = remainingLen;
 
                 /* An empty value corresponds to an empty string. */
                 if( ( pCanonicalRequest->pQueryLoc[ i ].value.dataLen > 0U ) &&
@@ -1037,8 +1063,8 @@ static SigV4Status_t generateCredentialScope( const SigV4Parameters_t * pSigV4Pa
                     {
                         *pBufLoc = '=';
                         ++pBufLoc;
-                        pCanonicalRequest->bufRemaining -= 1;
-                        encodedLen = pCanonicalRequest->bufRemaining;
+                        remainingLen -= 1;
+                        encodedLen = remainingLen;
                         returnStatus = encodeURI( pCanonicalRequest->pQueryLoc[ i ].value.pData,
                                                   pCanonicalRequest->pQueryLoc[ i ].value.dataLen,
                                                   pBufLoc,
@@ -1050,19 +1076,20 @@ static SigV4Status_t generateCredentialScope( const SigV4Parameters_t * pSigV4Pa
                     if( returnStatus == SigV4Success )
                     {
                         pBufLoc += encodedLen;
-                        pCanonicalRequest->bufRemaining -= encodedLen;
+                        remainingLen -= encodedLen;
                     }
                 }
             }
 
-            if( ( pCanonicalRequest->bufRemaining < 1U ) && ( numberOfParameters != i + 1 ) )
+            if( ( remainingLen < 1U ) && ( numberOfParameters != i + 1 ) )
             {
                 returnStatus = SigV4InsufficientMemory;
             }
             else if( ( numberOfParameters != i + 1 ) && ( returnStatus == SigV4Success ) )
             {
                 *pBufLoc = '&';
-                pCanonicalRequest->bufRemaining -= 1;
+                ++pBufLoc;
+                remainingLen -= 1;
             }
             else
             {
@@ -1076,6 +1103,7 @@ static SigV4Status_t generateCredentialScope( const SigV4Parameters_t * pSigV4Pa
             else
             {
                 pCanonicalRequest->pBufCur = pBufLoc;
+                pCanonicalRequest->bufRemaining = remainingLen;
             }
         }
 
@@ -1374,10 +1402,13 @@ int32_t hmacFinal( HmacContext_t * pHmacContext,
 
     if( returnStatus == 0 )
     {
-        /* Create the outer-padded key. */
+        /* Create the outer-padded key by retrieving the original key from
+         * the inner-padded key then XOR with opad. XOR is associative,
+         * so one way to do this is by performing XOR on each byte of the
+         * inner-padded key with (0x36 ^ 0x5c) = (ipad ^ opad) = 0x6a.  */
         for( i = 0; i < pHmacContext->keyLen; ++i )
         {
-            pHmacContext->key[ i ] ^= ( char ) ( 0x36 ^ 0x5C );
+            pHmacContext->key[ i ] ^= ( char ) ( 0x6a );
         }
 
         returnStatus = pCryptoInterface->hashInit( pCryptoInterface->pHashContext );
@@ -1408,6 +1439,10 @@ int32_t hmacFinal( HmacContext_t * pHmacContext,
     }
 
     return returnStatus;
+}
+
+static SigV4Status_t generateCanonicalRequest( CanonicalContext_t * canonicalRequest )
+{
 }
 
 int32_t completeHmac( const char * pKey,
@@ -1523,20 +1558,61 @@ SigV4Status_t SigV4_GenerateHTTPAuthorization( const SigV4Parameters_t * pParams
     SigV4Status_t returnStatus = SigV4Success;
     CanonicalContext_t canonicalContext;
 
-    canonicalContext.pBufCur = canonicalContext.pBufProcessing;
-    canonicalContext.bufRemaining = SIGV4_PROCESSING_BUFFER_LENGTH;
-
     /*returnStatus = verifySigV4Parameters( pParams ); */
+
     if( returnStatus == SigV4Success )
     {
-        returnStatus = generateCanonicalQuery( pParams->pHttpParameters->pQuery, pParams->pHttpParameters->queryLen, &canonicalContext );
-        printf( "Return status is %d", returnStatus );
-        printf( "Canonical query is %.*s\n", SIGV4_PROCESSING_BUFFER_LENGTH - canonicalContext.bufRemaining, canonicalContext.pBufProcessing );
+        canonicalContext.pBufCur = canonicalContext.pBufProcessing;
+        canonicalContext.bufRemaining = SIGV4_PROCESSING_BUFFER_LENGTH;
+
+        /* Write the HTTP Request Method to the canonical request. */
+        if( canonicalContext.bufRemaining < pParams->pHttpParameters->httpMethodLen + LINEFEED_CHAR_LEN )
+        {
+            LogError( ( "Insufficient space in processing buffer to write the HTTP method. "
+                        "Increase `SIGV4_PROCESSING_BUFFER_LENGTH` to fix, bytesExceeded=%d.",
+                        pParams->pHttpParameters->httpMethodLen - canonicalContext.bufRemaining ) );
+            returnStatus = SigV4InsufficientMemory;
+        }
+        else
+        {
+            ( void ) memcpy( canonicalContext.pBufCur,
+                             pParams->pHttpParameters->pHttpMethod,
+                             pParams->pHttpParameters->httpMethodLen );
+            canonicalContext.pBufCur += pParams->pHttpParameters->httpMethodLen;
+
+            *canonicalContext.pBufCur = LINEFEED_CHAR;
+            canonicalContext.pBufCur += LINEFEED_CHAR_LEN;
+
+            canonicalContext.bufRemaining -= pParams->pHttpParameters->httpMethodLen + \
+                                             LINEFEED_CHAR_LEN;
+        }
     }
 
     if( returnStatus == SigV4Success )
     {
-        returnStatus = generateCanonicalURI( pParams->pHttpParameters->pPath, pParams->pHttpParameters->pathLen, false, &canonicalContext );
+        if( ( pParams->pHttpParameters->pPath == NULL ) ||
+            ( pParams->pHttpParameters->pathLen == 0U ) )
+        {
+            /* If the absolute path is empty, use a forward slash (/). */
+            pParams->pHttpParameters->pPath = HTTP_EMPTY_PATH;
+            pParams->pHttpParameters->pathLen = HTTP_EMPTY_PATH_LEN;
+        }
+
+        /* Write the URI to the canonical request. */
+        if( ( pParams->serviceLen >= S3_SERVICE_NAME_LEN ) &&
+            ( strncmp( pParams->pService, S3_SERVICE_NAME, S3_SERVICE_NAME_LEN ) == 0 ) )
+        {
+            returnStatus = generateCanonicalURI( pParams->pHttpParameters->pPath, pParams->pHttpParameters->pathLen, false, &canonicalContext );
+        }
+        else
+        {
+            returnStatus = generateCanonicalURI( pParams->pHttpParameters->pPath, pParams->pHttpParameters->pathLen, true, &canonicalContext );
+        }
+    }
+
+    if( returnStatus == SigV4Success )
+    {
+        returnStatus = generateCanonicalQuery( pParams->pHttpParameters->pQuery, pParams->pHttpParameters->queryLen, &canonicalContext );
         printf( "Return status is %d", returnStatus );
         printf( "Canonical query is %.*s\n", SIGV4_PROCESSING_BUFFER_LENGTH - canonicalContext.bufRemaining, canonicalContext.pBufProcessing );
     }
@@ -1548,17 +1624,21 @@ SigV4Status_t SigV4_GenerateHTTPAuthorization( const SigV4Parameters_t * pParams
         credScope.dataLen = canonicalContext.bufRemaining;
         returnStatus = generateCredentialScope( pParams, &credScope );
 
+        printf( "Return status is %d", returnStatus );
+        printf( "Canonical query is %.*s\n", SIGV4_PROCESSING_BUFFER_LENGTH - canonicalContext.bufRemaining, canonicalContext.pBufProcessing );
+
         if( returnStatus == SigV4Success )
         {
             canonicalContext.bufRemaining -= credScope.dataLen;
         }
-
-        printf( "Return status is %d", returnStatus );
-        printf( "Canonical query is %.*s\n", SIGV4_PROCESSING_BUFFER_LENGTH - canonicalContext.bufRemaining, canonicalContext.pBufProcessing );
     }
 
     if( returnStatus == SigV4Success )
     {
+        char outputBuf[ SIGV4_HASH_MAX_DIGEST_LENGTH ];
+        char hash[ 64 ];
+        returnStatus = completeHmac( "f1ac9702eb5faf23ca291a4dc46deddeee2a78ccdaf0a412bed7714cfffb1cc40", 65, "world", 5, outputBuf, SIGV4_HASH_MAX_DIGEST_LENGTH, pParams->pCryptoInterface );
+        printf( "Return status is %d\n", returnStatus );
     }
 
     return returnStatus;

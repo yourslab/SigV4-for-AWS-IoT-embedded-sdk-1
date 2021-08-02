@@ -29,35 +29,47 @@
 #define SIGV4_INTERNAL_H_
 
 /* Constants for date verification. */
-#define YEAR_MIN               1900L /**< Earliest year accepted. */
-#define MONTH_ASCII_LEN        3U    /**< Length of month abbreviations. */
+#define YEAR_MIN                           1900L /**< Earliest year accepted. */
+#define MONTH_ASCII_LEN                    3U    /**< Length of month abbreviations. */
 
 /**
  * @brief Month name abbreviations for RFC 5322 date parsing.
  */
-#define MONTH_NAMES            { "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" }
+#define MONTH_NAMES                        { "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" }
 
 /**
  * @brief Number of days in each respective month.
  */
-#define MONTH_DAYS             { 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 }
+#define MONTH_DAYS                         { 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 }
 
-#define FORMAT_RFC_3339        "%4Y-%2M-%2DT%2h:%2m:%2sZ"         /**< Format string to parse RFC 3339 date. */
-#define FORMAT_RFC_3339_LEN    sizeof( FORMAT_RFC_3339 ) - 1U     /**< Length of the RFC 3339 format string. */
+#define FORMAT_RFC_3339                    "%4Y-%2M-%2DT%2h:%2m:%2sZ"         /**< Format string to parse RFC 3339 date. */
+#define FORMAT_RFC_3339_LEN                sizeof( FORMAT_RFC_3339 ) - 1U     /**< Length of the RFC 3339 format string. */
 
-#define FORMAT_RFC_5322        "%3*, %2D %3M %4Y %2h:%2m:%2s GMT" /**< Format string to parse RFC 5322 date. */
-#define FORMAT_RFC_5322_LEN    sizeof( FORMAT_RFC_5322 ) - 1U     /**< Length of the RFC 3339 format string. */
+#define FORMAT_RFC_5322                    "%3*, %2D %3M %4Y %2h:%2m:%2s GMT" /**< Format string to parse RFC 5322 date. */
+#define FORMAT_RFC_5322_LEN                sizeof( FORMAT_RFC_5322 ) - 1U     /**< Length of the RFC 3339 format string. */
 
-#define ISO_YEAR_LEN           4U                                 /**< Length of year value in ISO 8601 date. */
-#define ISO_NON_YEAR_LEN       2U                                 /**< Length of non-year values in ISO 8601 date. */
+#define ISO_YEAR_LEN                       4U                                 /**< Length of year value in ISO 8601 date. */
+#define ISO_NON_YEAR_LEN                   2U                                 /**< Length of non-year values in ISO 8601 date. */
 
-#define ISO_DATE_SCOPE_LEN     8U                                 /**< Length of date substring used in credential scope. */
+#define ISO_DATE_SCOPE_LEN                 8U                                 /**< Length of date substring used in credential scope. */
 
 /* SigV4 related string literals and lengths. */
-#define CREDENTIAL_SCOPE_SEPARATOR    '/'
-#define CREDENTIAL_SCOPE_SEPARATOR_LEN 1U
-#define CREDENTIAL_SCOPE_TERMINATOR   "aws4_request"
-#define CREDENTIAL_SCOPE_TERMINATOR_LEN   (sizeof(CREDENTIAL_SCOPE_TERMINATOR) - 1U)
+#define CREDENTIAL_SCOPE_SEPARATOR         '/'
+#define CREDENTIAL_SCOPE_SEPARATOR_LEN     1U
+#define CREDENTIAL_SCOPE_TERMINATOR        "aws4_request"
+#define CREDENTIAL_SCOPE_TERMINATOR_LEN    ( sizeof( CREDENTIAL_SCOPE_TERMINATOR ) - 1U )
+
+/**
+ * @brief Default value when pParams->pHttpParameters->pPath == NULL.
+ */
+#define HTTP_EMPTY_PATH                    "/"
+#define HTTP_EMPTY_PATH_LEN                ( sizeof( HTTP_EMPTY_PATH ) - 1U ) /**< The length of #HTTP_EMPTY_PATH. */
+
+#define LINEFEED_CHAR                      '\n'                               /**< A linefeed character used to build the canonical request. */
+#define LINEFEED_CHAR_LEN                  1U                                 /**< The length of #LINEFEED_CHAR. */
+
+#define S3_SERVICE_NAME                     "s3" /**< S3 is the only service where the URI must only be encoded once. */
+#define S3_SERVICE_NAME_LEN              ( sizeof( S3_SERVICE_NAME ) - 1U ) /**< The length of #S3_SERVICE_NAME. */
 
 /**
  * @brief An aggregator representing the individually parsed elements of the
@@ -104,18 +116,18 @@ typedef SigV4KeyValuePair_t SigV4Header_t; /**< SigV4 header representation */
  */
 typedef struct CanonicalContext
 {
-    SigV4KeyValuePair_t pQueryLoc[ SIGV4_MAX_QUERY_PAIR_COUNT ];           /**< Query pointers used during sorting. */
-    SigV4KeyValuePair_t pHeadersLoc[ SIGV4_MAX_HTTP_HEADER_COUNT ];        /**< Header pointers used during sorting. */
+    SigV4KeyValuePair_t pQueryLoc[ SIGV4_MAX_QUERY_PAIR_COUNT ];    /**< Query pointers used during sorting. */
+    SigV4KeyValuePair_t pHeadersLoc[ SIGV4_MAX_HTTP_HEADER_COUNT ]; /**< Header pointers used during sorting. */
 
-    uint8_t pBufProcessing[ SIGV4_PROCESSING_BUFFER_LENGTH ]; /**< Internal calculation buffer used during canonicalization. */
-    char * pBufCur;                                           /**< pBufProcessing cursor */
-    size_t bufRemaining;                                      /**< pBufProcessing value used during internal calculation. */
+    uint8_t pBufProcessing[ SIGV4_PROCESSING_BUFFER_LENGTH ];       /**< Internal calculation buffer used during canonicalization. */
+    char * pBufCur;                                                 /**< pBufProcessing cursor */
+    size_t bufRemaining;                                            /**< pBufProcessing value used during internal calculation. */
 } CanonicalContext_t;
 
 typedef struct HmacContext
 {
     const SigV4CryptoInterface_t * pCryptoInterface;
-    char key[SIGV4_HASH_MAX_BLOCK_LENGTH];
+    char key[ SIGV4_HASH_MAX_BLOCK_LENGTH ];
     size_t keyLen;
 } HmacContext_t;
 
