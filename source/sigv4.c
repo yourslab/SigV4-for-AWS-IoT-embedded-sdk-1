@@ -1325,7 +1325,7 @@ int32_t hmacKey( HmacContext_t * pHmacContext,
                  const char * pKey,
                  size_t keyLen )
 {
-    int32_t returnStatus = -1;
+    int32_t returnStatus = 0;
     const SigV4CryptoInterface_t * pCryptoInterface = NULL;
 
     assert( pHmacContext != NULL );
@@ -1337,16 +1337,14 @@ int32_t hmacKey( HmacContext_t * pHmacContext,
 
     pCryptoInterface = pHmacContext->pCryptoInterface;
 
-    returnStatus = pCryptoInterface->hashInit( pCryptoInterface->pHashContext );
-
     if( pHmacContext->keyLen + keyLen <= pCryptoInterface->hashBlockLen )
     {
-        /* The key fits into the block so just use it as is. */
-        ( void ) memcpy( pHmacContext->key, pKey, keyLen );
+        /* The key fits into the block so just append it. */
+        ( void ) memcpy( pHmacContext->key + pHmacContext->keyLen, pKey, keyLen );
     }
-    else if( returnStatus == 0 )
+    else
     {
-        /* Initialize the hash along with the existing key data. */
+        /* Initialize the hash context and hash existing key data. */
         if( pHmacContext->keyLen <= pCryptoInterface->hashBlockLen )
         {
             returnStatus = pCryptoInterface->hashInit( pCryptoInterface->pHashContext );
@@ -1367,10 +1365,8 @@ int32_t hmacKey( HmacContext_t * pHmacContext,
                                                          keyLen );
         }
     }
-    else
-    {
-        /* Empty else. */
-    }
+
+    pHmacContext->keyLen += keyLen;
 
     return returnStatus;
 }
@@ -1412,6 +1408,7 @@ int32_t hmacData( HmacContext_t * pHmacContext,
     if( returnStatus == 0 )
     {
         pHmacContext->keyLen = pCryptoInterface->hashBlockLen;
+
         for( i = 0; i < pCryptoInterface->hashBlockLen; ++i )
         {
             /* XOR the key with the ipad. */
@@ -1541,7 +1538,8 @@ static SigV4Status_t writeLineToCanonicalRequest( const char * pLine,
     return returnStatus;
 }
 
-int32_t completeHmac( const char * pKey,
+int32_t completeHmac( HmacContext_t * pHmacContext,
+                      const char * pKey,
                       size_t keyLen,
                       const char * pData,
                       size_t dataLen,
@@ -1549,21 +1547,28 @@ int32_t completeHmac( const char * pKey,
                       size_t outputLen,
                       const SigV4CryptoInterface_t * pCryptoInterface )
 {
-    int32_t returnStatus = -1;
-    HmacContext_t hmacContext = { 0 };
+    int32_t returnStatus = 0;
 
-    hmacContext.pCryptoInterface = pCryptoInterface;
-
-    returnStatus = hmacKey( &hmacContext, pKey, keyLen );
-
-    if( returnStatus == 0 )
+    if( outputLen < pCryptoInterface->hashDigestLen )
     {
-        returnStatus = hmacData( &hmacContext, pData, dataLen );
+        LogError( ( "Not enough buffer to write the hash digest, bytesExceeded=%zu",
+                    pCryptoInterface->hashDigestLen - outputLen ) );
+        returnStatus = -1;
     }
 
     if( returnStatus == 0 )
     {
-        returnStatus = hmacFinal( &hmacContext, pOutput, outputLen );
+        returnStatus = hmacKey( pHmacContext, pKey, keyLen );
+    }
+
+    if( returnStatus == 0 )
+    {
+        returnStatus = hmacData( pHmacContext, pData, dataLen );
+    }
+
+    if( returnStatus == 0 )
+    {
+        returnStatus = hmacFinal( pHmacContext, pOutput, outputLen );
     }
 
     return returnStatus;
@@ -1667,6 +1672,96 @@ static SigV4Status_t writeStringToSign( const SigV4Parameters_t * pParams,
     return returnStatus;
 }
 
+static SigV4Status_t generateSigningKey( SigV4Parameters_t * pSigV4Params,
+                                         HmacContext_t * pHmacContext,
+                                         SigV4String_t * pSigningKey,
+                                         size_t * pBytesRemaining )
+{
+    SigV4Status_t returnStatus = SigV4Success;
+    int32_t hmacStatus = 0;
+    char * pSigningKeyStart = NULL;
+
+    assert( pSigV4Params != NULL );
+    assert( pHmacContext != NULL );
+    assert( pSigningKey != NULL );
+    assert( pBytesRemaining != NULL );
+
+    hmacStatus = hmacKey( pHmacContext,
+                          SIGV4_HMAC_SIGNING_KEY_PREFIX,
+                          SIGV4_HMAC_SIGNING_KEY_PREFIX_LEN );
+
+    /* To calculate the final signing key, this function needs at least enough
+     * buffer to hold the length of two digests since one digest is used to
+     * calculate the other. */
+    if( *pBytesRemaining < pSigV4Params->pCryptoInterface->hashDigestLen * 2 )
+    {
+        returnStatus == SigV4InsufficientMemory;
+    }
+
+    if( hmacStatus == 0 )
+    {
+        hmacStatus = completeHmac( pHmacContext,
+                                   pSigV4Params->pCredentials->pSecretAccessKey,
+                                   pSigV4Params->pCredentials->secretAccessKeyLen,
+                                   pSigV4Params->pDateIso8601,
+                                   ISO_DATE_SCOPE_LEN,
+                                   pSigningKey->pData,
+                                   pSigningKey->dataLen,
+                                   pSigV4Params->pCryptoInterface );
+        *pBytesRemaining -= pSigV4Params->pCryptoInterface->hashDigestLen;
+    }
+
+    if( hmacStatus == 0 )
+    {
+        pSigningKeyStart = pSigningKey->pData + pSigV4Params->pCryptoInterface->hashDigestLen + 1U;
+        hmacStatus = completeHmac( pHmacContext,
+                                   pSigningKey->pData,
+                                   pSigV4Params->pCryptoInterface->hashDigestLen,
+                                   pSigV4Params->pRegion,
+                                   pSigV4Params->regionLen,
+                                   pSigningKeyStart,
+                                   *pBytesRemaining,
+                                   pSigV4Params->pCryptoInterface );
+        *pBytesRemaining -= pSigV4Params->pCryptoInterface->hashDigestLen;
+    }
+
+    if( hmacStatus == 0 )
+    {
+        hmacStatus = completeHmac( pHmacContext,
+                                   pSigningKeyStart,
+                                   pSigV4Params->pCryptoInterface->hashDigestLen,
+                                   pSigV4Params->pService,
+                                   pSigV4Params->serviceLen,
+                                   pSigningKey->pData,
+                                   pSigV4Params->pCryptoInterface->hashDigestLen,
+                                   pSigV4Params->pCryptoInterface );
+    }
+
+    if( hmacStatus == 0 )
+    {
+        hmacStatus = completeHmac( pHmacContext,
+                                   pSigningKey->pData,
+                                   pSigV4Params->pCryptoInterface->hashDigestLen,
+                                   CREDENTIAL_SCOPE_TERMINATOR,
+                                   CREDENTIAL_SCOPE_TERMINATOR_LEN,
+                                   pSigningKeyStart,
+                                   pSigV4Params->pCryptoInterface->hashDigestLen,
+                                   pSigV4Params->pCryptoInterface );
+    }
+
+    if( hmacStatus == 0 )
+    {
+        pSigningKey->pData = pSigningKeyStart;
+        pSigningKey->dataLen = pSigV4Params->pCryptoInterface->hashDigestLen;
+    }
+    else
+    {
+        returnStatus = SigV4HashError;
+    }
+
+    return returnStatus;
+}
+
 SigV4Status_t SigV4_AwsIotDateToIso8601( const char * pDate,
                                          size_t dateLen,
                                          char * pDateISO8601,
@@ -1752,7 +1847,9 @@ SigV4Status_t SigV4_GenerateHTTPAuthorization( const SigV4Parameters_t * pParams
     SigV4Status_t returnStatus = SigV4Success;
     CanonicalContext_t canonicalContext;
     char * pPath = NULL;
-    size_t pathLen = 0U;
+    size_t pathLen = 0U, encodedLen = 0U;
+    HmacContext_t hmacContext;
+    SigV4String_t signingKey;
 
     /*returnStatus = verifySigV4Parameters( pParams ); */
 
@@ -1840,7 +1937,7 @@ SigV4Status_t SigV4_GenerateHTTPAuthorization( const SigV4Parameters_t * pParams
     /* Hash and hex-encode the canonical request to the buffer. */
     if( returnStatus == SigV4Success )
     {
-        size_t encodedLen = canonicalContext.bufRemaining;
+        encodedLen = canonicalContext.bufRemaining;
         returnStatus = completeHashAndHexEncode( pParams->pHttpParameters->pPayload,
                                                  pParams->pHttpParameters->payloadLen,
                                                  canonicalContext.pBufCur,
@@ -1861,16 +1958,36 @@ SigV4Status_t SigV4_GenerateHTTPAuthorization( const SigV4Parameters_t * pParams
     }
 
     /* Write the signing key. The is done by computing the following function:
-     * HMAC(HMAC(HMAC(HMAC("AWS4" + kSecret,"20150830"),"us-east-1"),"iam"),"aws4_request") */
+     * HMAC(HMAC(HMAC(HMAC("AWS4" + kSecret,pDate),pRegion),pService),"aws4_request") */
     if( returnStatus == SigV4Success )
     {
-        returnStatus = hmacKey()
+        hmacContext.pCryptoInterface = pParams->pCryptoInterface;
+        signingKey.pData = canonicalContext.pBufCur;
+        signingKey.dataLen = canonicalContext.bufRemaining;
+        returnStatus = generateSigningKey( pParams,
+                                           &hmacContext,
+                                           &signingKey,
+                                           &canonicalContext.bufRemaining );
+    }
+
+    SigV4String_t originalHmac;
+    SigV4String_t hexEncodedHmac;
+    originalHmac.pData = signingKey.pData;
+    originalHmac.dataLen = pParams->pCryptoInterface->hashDigestLen;
+    hexEncodedHmac.pData = (char *)canonicalContext.pBufProcessing;
+    hexEncodedHmac.dataLen = 64;
+
+    if( returnStatus == SigV4Success )
+    {
+        /* Hex-encode the request payload. */
+        returnStatus = lowercaseHexEncode( &originalHmac,
+                                           &hexEncodedHmac );
     }
 
     if( returnStatus == SigV4Success )
     {
         printf( "Return status is %d\n", returnStatus );
-        printf( "Canonical query is %.*s\n", SIGV4_PROCESSING_BUFFER_LENGTH - canonicalContext.bufRemaining, canonicalContext.pBufProcessing );
+        printf( "Canonical query is %.*s\n", 64, hexEncodedHmac.pData );
     }
 
     return returnStatus;

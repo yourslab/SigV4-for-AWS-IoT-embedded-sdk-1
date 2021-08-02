@@ -394,7 +394,7 @@ typedef struct SigV4Parameters
 /* @[declare_sigV4_generateHTTPAuthorization_function] */
 SigV4Status_t SigV4_GenerateHTTPAuthorization( const SigV4Parameters_t * pParams,
                                                char * pAuthBuf,
-                                               size_t * authBufLen,
+                                               size_t * pAuthBufLen,
                                                char ** pSignature,
                                                size_t * signatureLen );
 /* @[declare_sigV4_generateHTTPAuthorization_function] */

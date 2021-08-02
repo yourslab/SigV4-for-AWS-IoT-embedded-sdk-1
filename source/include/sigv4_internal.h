@@ -71,6 +71,9 @@
 #define S3_SERVICE_NAME                     "s3" /**< S3 is the only service where the URI must only be encoded once. */
 #define S3_SERVICE_NAME_LEN              ( sizeof( S3_SERVICE_NAME ) - 1U ) /**< The length of #S3_SERVICE_NAME. */
 
+#define SIGV4_HMAC_SIGNING_KEY_PREFIX       "AWS4" /**< HMAC signing key prefix. */
+#define SIGV4_HMAC_SIGNING_KEY_PREFIX_LEN   (sizeof(SIGV4_HMAC_SIGNING_KEY_PREFIX) - 1U)
+
 /**
  * @brief An aggregator representing the individually parsed elements of the
  * user-provided date parameter. This is used to verify the complete date
