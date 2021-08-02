@@ -347,7 +347,7 @@ typedef struct SigV4Parameters
     const char * pDateIso8601;
 
     const char * pAlgorithm;
-    size_t algorithm;
+    size_t algorithmLen;
 
     /**
      * @brief The target AWS region for the request. Please see

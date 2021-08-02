@@ -1732,6 +1732,23 @@ SigV4Status_t SigV4_GenerateHTTPAuthorization( const SigV4Parameters_t * pParams
 
     if( returnStatus == SigV4Success )
     {
+        size_t encodedLen = canonicalContext.bufRemaining;
+        char * pBufStart = (char *)canonicalContext.pBufProcessing;
+        returnStatus = completeHashAndHexEncode( pBufStart,
+                                                 (size_t) (canonicalContext.pBufCur - pBufStart),
+                                                 canonicalContext.pBufCur + 1,
+                                                 &encodedLen,
+                                                 pParams->pCryptoInterface );
+        if( returnStatus == SigV4Success )
+        {
+            (void) memmove( pBufStart, canonicalContext.pBufCur + 1, encodedLen );
+            canonicalContext.pBufCur = pBufStart;
+            canonicalContext.bufRemaining = SIGV4_PROCESSING_BUFFER_LENGTH - encodedLen;
+        }
+    }
+
+    if( returnStatus == SigV4Success )
+    {
         printf( "Return status is %d\n", returnStatus );
         printf( "Canonical query is %.*s\n", SIGV4_PROCESSING_BUFFER_LENGTH - canonicalContext.bufRemaining, canonicalContext.pBufProcessing );
     }
