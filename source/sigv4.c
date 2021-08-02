@@ -1793,8 +1793,6 @@ SigV4Status_t SigV4_GenerateHTTPAuthorization( const SigV4Parameters_t * pParams
         if( returnStatus == SigV4Success )
         {
             SigV4String_t credentialScope;
-            char * pAlgorithm = NULL;
-            size_t algorithmLen = 0U;
 
             /* Need to write all substrings that come before the hash in the string to sign. */
 
@@ -1807,7 +1805,7 @@ SigV4Status_t SigV4_GenerateHTTPAuthorization( const SigV4Parameters_t * pParams
 
             /* Concatenate entire ISO 8601 date string. */
             ( void ) memcpy( pBufStart, pParams->pDateIso8601, SIGV4_ISO_STRING_LEN );
-            pBufStart += ISO_DATE_SCOPE_LEN;
+            pBufStart += SIGV4_ISO_STRING_LEN;
 
             *pBufStart = LINEFEED_CHAR;
             pBufStart += LINEFEED_CHAR_LEN;
