@@ -1648,8 +1648,9 @@ static SigV4Status_t writeStringToSign( const SigV4Parameters_t * pParams,
         credentialScope.dataLen = sizeNeededForCredentialScope( pParams );
         /* Concatenate credential scope. */
         ( void ) generateCredentialScope( pParams, &credentialScope );
+        pBufStart += credentialScope.dataLen;
         /* Concatenate linefeed character. */
-        *pCanonicalContext->pBufCur = LINEFEED_CHAR;
+        *pBufStart = LINEFEED_CHAR;
     }
 
     return returnStatus;
@@ -2037,6 +2038,9 @@ SigV4Status_t SigV4_GenerateHTTPAuthorization( const SigV4Parameters_t * pParams
         /* Write "Signature=<signature>" */
         (void) memcpy(pAuthBuf, AUTH_SIGNATURE_PREFIX, AUTH_SIGNATURE_PREFIX_LEN);
     }
+
+        SigV4String_t originalHmac;
+        SigV4String_t hexEncodedHmac;
 
     /* Hex-encode the final signature beforehand to its precalculated
      * location in the buffer provided for the Authorizaton header value. */
