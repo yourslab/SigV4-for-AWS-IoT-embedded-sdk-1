@@ -1955,7 +1955,8 @@ SigV4Status_t SigV4_GenerateHTTPAuthorization( const SigV4Parameters_t * pParams
         returnStatus = writeStringToSign( pParams, &canonicalContext );
     }
 
-    /* Write the signing key. The is done by computing the following function:
+    /* Write the signing key. The is done by computing the following function
+     * where the + operator means concatenation:
      * HMAC(HMAC(HMAC(HMAC("AWS4" + kSecret,pDate),pRegion),pService),"aws4_request") */
     if( returnStatus == SigV4Success )
     {
@@ -1968,16 +1969,30 @@ SigV4Status_t SigV4_GenerateHTTPAuthorization( const SigV4Parameters_t * pParams
                                            &canonicalContext.bufRemaining );
     }
 
-    SigV4String_t originalHmac;
-    SigV4String_t hexEncodedHmac;
-    originalHmac.pData = signingKey.pData;
-    originalHmac.dataLen = pParams->pCryptoInterface->hashDigestLen;
-    hexEncodedHmac.pData = ( char * ) canonicalContext.pBufProcessing;
-    hexEncodedHmac.dataLen = 64;
+    /* Use the SigningKey and StringToSign to produce the final signature.
+     * Note that the StringToSign starts from the beginning of the processing buffer. */
+    if( ( returnStatus == SigV4Success ) &&
+        ( completeHmac( &hmacContext,
+                        signingKey.pData,
+                        signingKey.dataLen,
+                        ( char * ) canonicalContext.pBufProcessing,
+                        ( size_t ) ( canonicalContext.pBufCur - (char *)canonicalContext.pBufProcessing ),
+                        canonicalContext.pBufCur,
+                        pParams->pCryptoInterface->hashDigestLen,
+                        pParams->pCryptoInterface ) != 0 ) )
+    {
+        returnStatus = SigV4HashError;
+    }
 
+    /* Hex-encode the final signature to the start of the buffer. */
     if( returnStatus == SigV4Success )
     {
-        /* Hex-encode the request payload. */
+        SigV4String_t originalHmac;
+        SigV4String_t hexEncodedHmac;
+        originalHmac.pData = canonicalContext.pBufCur;
+        originalHmac.dataLen = pParams->pCryptoInterface->hashDigestLen;
+        hexEncodedHmac.pData = ( char * ) canonicalContext.pBufProcessing;
+        hexEncodedHmac.dataLen = 64;
         returnStatus = lowercaseHexEncode( &originalHmac,
                                            &hexEncodedHmac );
     }
