@@ -1022,7 +1022,7 @@ static SigV4Status_t generateCredentialScope( const SigV4Parameters_t * pSigV4Pa
         pBufLoc = canonicalRequest->pBufCur;
         buffRemaining = canonicalRequest->bufRemaining;
 
-        keyLen = canonicalRequest->pHeadersLoc[ headerNum ].key.dataLen;
+        keyLen = canonicalRequest->pHeadersLoc[ headerIndex ].key.dataLen;
 
         if( keyLen + 1 > buffRemaining )
         {
@@ -1034,11 +1034,11 @@ static SigV4Status_t generateCredentialScope( const SigV4Parameters_t * pSigV4Pa
             {
                 if( !( flags & SIGV4_HTTP_PATH_IS_CANONICAL_FLAG ) )
                 {
-                    *pBufLoc = tolower( canonicalRequest->pHeadersLoc[ headerNum ].key.pData[ i ] );
+                    *pBufLoc = tolower( canonicalRequest->pHeadersLoc[ headerIndex ].key.pData[ i ] );
                 }
                 else
                 {
-                    *pBufLoc = canonicalRequest->pHeadersLoc[ headerNum ].key.pData[ i ];
+                    *pBufLoc = canonicalRequest->pHeadersLoc[ headerIndex ].key.pData[ i ];
                 }
 
                 pBufLoc++;
@@ -1066,7 +1066,7 @@ static SigV4Status_t generateCredentialScope( const SigV4Parameters_t * pSigV4Pa
 
         for( numberOfHeaders = 0; numberOfHeaders < headerCount; numberOfHeaders++ )
         {
-            assert( ( canonicalRequest->pHeadersLoc[ numberOfHeaders ].key.pData ) != NULL )
+            assert( ( canonicalRequest->pHeadersLoc[ numberOfHeaders ].key.pData ) != NULL );
             returnStatus = writeSignedHeaderToString( numberOfHeaders, flags, canonicalRequest );
 
             if( returnStatus != SigV4Success )
@@ -1077,7 +1077,7 @@ static SigV4Status_t generateCredentialScope( const SigV4Parameters_t * pSigV4Pa
 
         if( returnStatus == SigV4Success )
         {
-            canonicalRequest->pBufCur--;
+            canonicalRequest->pBufCur++;
             *canonicalRequest->pBufCur = '\n';
         }
 
@@ -1098,8 +1098,8 @@ static SigV4Status_t generateCredentialScope( const SigV4Parameters_t * pSigV4Pa
         pBufLoc = canonicalRequest->pBufCur;
         buffRemaining = canonicalRequest->bufRemaining;
 
-        keyLen = canonicalRequest->pHeadersLoc[ headerNum ].key.dataLen;
-        valLen = canonicalRequest->pHeadersLoc[ headerNum ].value.dataLen;
+        keyLen = canonicalRequest->pHeadersLoc[ headerIndex ].key.dataLen;
+        valLen = canonicalRequest->pHeadersLoc[ headerIndex ].value.dataLen;
 
         if( keyLen + valLen + 2 > buffRemaining )
         {
@@ -1109,20 +1109,20 @@ static SigV4Status_t generateCredentialScope( const SigV4Parameters_t * pSigV4Pa
         {
             for( i = 0; i < keyLen; i++ )
             {
-                *pBufLoc = tolower( canonicalRequest->pHeadersLoc[ headerNum ].key.pData[ i ] );
+                *pBufLoc = tolower( canonicalRequest->pHeadersLoc[ headerIndex ].key.pData[ i ] );
                 pBufLoc++;
             }
 
             *pBufLoc = ':';
             pBufLoc++;
-            value = canonicalRequest->pHeadersLoc[ headerNum ].value.pData;
+            value = canonicalRequest->pHeadersLoc[ headerIndex ].value.pData;
             trimValueLen = 0;
 
             for( i = 0; i < valLen; i++ )
             {
                 if( !( isspace( value[ i ] ) && ( i + 1 <= valLen ) && ( ( i + 1 == valLen ) || isspace( value[ i + 1 ] ) || ( trimValueLen == 0 ) ) ) )
                 {
-                    *pBufLoc = canonicalRequest->pHeadersLoc[ headerNum ].value.pData[ i ];
+                    *pBufLoc = canonicalRequest->pHeadersLoc[ headerIndex ].value.pData[ i ];
                     pBufLoc++;
                     trimValueLen + 1U;
                 }
@@ -1172,7 +1172,7 @@ static SigV4Status_t generateCredentialScope( const SigV4Parameters_t * pSigV4Pa
     {
         const char * start;
         const char * end;
-        size_t fieldFlag = 1, numberOfHeaders = 0, i = 0;
+        uint8_t fieldFlag = 1, numberOfHeaders = 0, i = 0;
         SigV4Status_t returnStatus = SigV4Success;
 
         assert( pHeaders != NULL );
@@ -1201,14 +1201,21 @@ static SigV4Status_t generateCredentialScope( const SigV4Parameters_t * pSigV4Pa
             }
             else
             {
-                if( ( ( flags & SIGV4_HTTP_PATH_IS_CANONICAL_FLAG ) && ( pHeaders[ i ] == '\n' ) ) ||
-                    ( !( flags & SIGV4_HTTP_PATH_IS_CANONICAL_FLAG ) && ( pHeaders[ i ] == '\r' ) && ( ( i + 1 ) < headersLen ) && ( pHeaders[ i + 1 ] == '\n' ) ) )
+                if( ( !( flags & SIGV4_HTTP_PATH_IS_CANONICAL_FLAG ) && ( pHeaders[ i ] == '\r' ) && ( ( i + 1 ) < headersLen ) && ( pHeaders[ i + 1 ] == '\n' ) ) )
                 {
                     canonicalRequest->pHeadersLoc[ numberOfHeaders ].value.pData = start;
                     canonicalRequest->pHeadersLoc[ numberOfHeaders ].value.dataLen = ( end - start );
                     start = end + 1U;
                     fieldFlag = 1;
-                    numberOfHeaders + 1U;
+                    numberOfHeaders++;
+                }
+                else if( ( ( flags & SIGV4_HTTP_PATH_IS_CANONICAL_FLAG ) && ( pHeaders[ i ] == '\n' ) ) )
+                {
+                    canonicalRequest->pHeadersLoc[ numberOfHeaders ].value.pData = start;
+                    canonicalRequest->pHeadersLoc[ numberOfHeaders ].value.dataLen = ( end - start );
+                    start = end + 1U;
+                    fieldFlag = 1;
+                    numberOfHeaders++;
                 }
             }
 
@@ -1228,7 +1235,19 @@ static SigV4Status_t generateCredentialScope( const SigV4Parameters_t * pSigV4Pa
 
         if( returnStatus == SigV4Success )
         {
-            returnStatus = appendSignedHeaders( numberOfHeaders, canonicalRequest );
+            *canonicalRequest->pBufCur = LINEFEED_CHAR;
+            canonicalRequest->bufRemaining -= LINEFEED_CHAR_LEN;
+        }
+
+        if( returnStatus == SigV4Success )
+        {
+            returnStatus = appendSignedHeaders( numberOfHeaders, flags, canonicalRequest );
+        }
+
+        if( returnStatus == SigV4Success )
+        {
+            printf( "Return status is %d", returnStatus );
+            printf( "Canonical query is %.*s\n", SIGV4_PROCESSING_BUFFER_LENGTH - canonicalRequest->bufRemaining, canonicalRequest->pBufProcessing );
         }
 
         return returnStatus;
@@ -2226,12 +2245,12 @@ SigV4Status_t SigV4_GenerateHTTPAuthorization( const SigV4Parameters_t * pParams
                                                         pParams->pHttpParameters->headersLen,
                                                         &canonicalContext );
         }
-        else
-        {
-            /* Canonicalize original HTTP headers before writing to buffer.
-             * returnStatus = generateCanonicalHeaders( pParams->pHttpParameters->pHeaders, pParams->pHttpParameters->headersLen, &canonicalContext );
-             */
-        }
+
+        /* Canonicalize original HTTP headers before writing to buffer. */
+        returnStatus = generateCanonicalHeaders( pParams->pHttpParameters->pHeaders,
+                                                 pParams->pHttpParameters->headersLen,
+                                                 pParams->pHttpParameters->flags,
+                                                 &canonicalContext );
     }
 
     /* Hash and hex-encode the canonical request to the buffer. */
