@@ -579,7 +579,7 @@ static SigV4Status_t lowercaseHexEncode( const SigV4String_t * pInputStr,
 
     hex = pHexOutput->pData;
 
-    if( pHexOutput->dataLen < pInputStr->dataLen * 2 )
+    if( pHexOutput->dataLen < pInputStr->dataLen * 2U )
     {
         returnStatus = SigV4InsufficientMemory;
     }
@@ -594,7 +594,7 @@ static SigV4Status_t lowercaseHexEncode( const SigV4String_t * pInputStr,
             hex++;
         }
 
-        pHexOutput->dataLen = pInputStr->dataLen * 2;
+        pHexOutput->dataLen = pInputStr->dataLen * 2U;
     }
 
     return returnStatus;
@@ -604,11 +604,10 @@ static SigV4Status_t lowercaseHexEncode( const SigV4String_t * pInputStr,
 
 static size_t sizeNeededForCredentialScope( const SigV4Parameters_t * pSigV4Params )
 {
-    return ISO_DATE_SCOPE_LEN +                                               \
-           CREDENTIAL_SCOPE_SEPARATOR_LEN + pSigV4Params->regionLen +         \
-           CREDENTIAL_SCOPE_SEPARATOR_LEN + pSigV4Params->serviceLen +        \
-           CREDENTIAL_SCOPE_SEPARATOR_LEN + CREDENTIAL_SCOPE_TERMINATOR_LEN + \
-           LINEFEED_CHAR_LEN;
+    return ISO_DATE_SCOPE_LEN +                                        \
+           CREDENTIAL_SCOPE_SEPARATOR_LEN + pSigV4Params->regionLen +  \
+           CREDENTIAL_SCOPE_SEPARATOR_LEN + pSigV4Params->serviceLen + \
+           CREDENTIAL_SCOPE_SEPARATOR_LEN + CREDENTIAL_SCOPE_TERMINATOR_LEN;
 }
 
 static SigV4Status_t generateCredentialScope( const SigV4Parameters_t * pSigV4Params,
@@ -663,10 +662,6 @@ static SigV4Status_t generateCredentialScope( const SigV4Parameters_t * pSigV4Pa
         /* Concatenate terminator. */
         ( void ) memcpy( pBufWrite, CREDENTIAL_SCOPE_TERMINATOR, CREDENTIAL_SCOPE_TERMINATOR_LEN );
         pBufWrite += CREDENTIAL_SCOPE_TERMINATOR_LEN;
-
-        /* Concatenate linefeed character. */
-        *pBufWrite = LINEFEED_CHAR;
-        pBufWrite += LINEFEED_CHAR_LEN;
 
         pCredScope->dataLen = sizeNeeded;
     }
@@ -954,7 +949,7 @@ static SigV4Status_t generateCredentialScope( const SigV4Parameters_t * pSigV4Pa
 
 /*-----------------------------------------------------------*/
 
-    static void setQueryStringFieldsAndValues( char * pQuery,
+    static void setQueryStringFieldsAndValues( const char * pQuery,
                                                size_t queryLen,
                                                size_t * pNumberOfParameters,
                                                CanonicalContext_t * pCanonicalRequest )
@@ -1123,9 +1118,7 @@ static SigV4Status_t generateCredentialScope( const SigV4Parameters_t * pSigV4Pa
         assert( pCanonicalContext != NULL );
         assert( pCanonicalContext->pBufCur != NULL );
 
-        /* Note: Cast is used to remove the const with the assumption that #setQueryStringFieldsAndValues
-         * never updates #pQuery.  */
-        setQueryStringFieldsAndValues( ( char * ) pQuery, queryLen, &numberOfParameters, pCanonicalContext );
+        setQueryStringFieldsAndValues( pQuery, queryLen, &numberOfParameters, pCanonicalContext );
 
         if( numberOfParameters > SIGV4_MAX_QUERY_PAIR_COUNT )
         {
@@ -1599,24 +1592,13 @@ static size_t writeStringToSignPrefix( char * pBufStart,
 }
 
 static SigV4Status_t writeStringToSign( const SigV4Parameters_t * pParams,
+                                        const char * pAlgorithm,
+                                        size_t algorithmLen,
                                         CanonicalContext_t * pCanonicalContext )
 {
     SigV4Status_t returnStatus = SigV4Success;
-    size_t encodedLen = pCanonicalContext->bufRemaining, algorithmLen = 0U;
+    size_t encodedLen = pCanonicalContext->bufRemaining;
     char * pBufStart = ( char * ) pCanonicalContext->pBufProcessing;
-    char * pAlgorithm = NULL;
-
-    if( ( pParams->pAlgorithm == NULL ) || ( pParams->algorithmLen == 0 ) )
-    {
-        /* The default algorithm is AWS4-HMAC-SHA256. */
-        pAlgorithm = SIGV4_AWS4_HMAC_SHA256;
-        algorithmLen = SIGV4_AWS4_HMAC_SHA256_LENGTH;
-    }
-    else
-    {
-        pAlgorithm = pParams->pAlgorithm;
-        algorithmLen = pParams->algorithmLen;
-    }
 
     returnStatus = completeHashAndHexEncode( pBufStart,
                                              ( size_t ) ( pCanonicalContext->pBufCur - pBufStart ),
@@ -1626,26 +1608,27 @@ static SigV4Status_t writeStringToSign( const SigV4Parameters_t * pParams,
 
     if( returnStatus == SigV4Success )
     {
-        /* Note that the credential scope size calculation already
-         * accounts for the linefeed. */
         size_t sizeNeededBeforeHash = algorithmLen + LINEFEED_CHAR_LEN +         \
                                       SIGV4_ISO_STRING_LEN + LINEFEED_CHAR_LEN + \
-                                      sizeNeededForCredentialScope( pParams );
+                                      sizeNeededForCredentialScope( pParams ) + LINEFEED_CHAR_LEN;
 
         /* Check if there is enough space for the string to sign. */
-        if( sizeNeededBeforeHash + ( pParams->pCryptoInterface->hashDigestLen * 2 ) >
+        if( sizeNeededBeforeHash + ( pParams->pCryptoInterface->hashDigestLen * 2U ) >
             SIGV4_PROCESSING_BUFFER_LENGTH )
         {
             LogError( ( "Insufficient space in processing buffer for string to sign. "
                         "Increase `SIGV4_PROCESSING_BUFFER_LENGTH` to fix, bytesExceeded=%zu.",
-                        sizeNeededBeforeHash + ( pParams->pCryptoInterface->hashDigestLen * 2 ) - \
+                        sizeNeededBeforeHash + ( pParams->pCryptoInterface->hashDigestLen * 2U ) - \
                         SIGV4_PROCESSING_BUFFER_LENGTH ) );
             returnStatus = SigV4InsufficientMemory;
         }
         else
         {
-            /* Copy the hash of the canonical request to where it will be in the string to sign. */
-            ( void ) memmove( pBufStart + sizeNeededBeforeHash, pCanonicalContext->pBufCur + 1, encodedLen );
+            /* Copy the hash of the canonical request beforehand to its precalculated location
+             * in the string to sign. */
+            ( void ) memmove( pBufStart + sizeNeededBeforeHash,
+                              pCanonicalContext->pBufCur + 1,
+                              encodedLen );
             pCanonicalContext->pBufCur = pBufStart + sizeNeededBeforeHash + encodedLen;
             pCanonicalContext->bufRemaining = SIGV4_PROCESSING_BUFFER_LENGTH - encodedLen - sizeNeededBeforeHash;
         }
@@ -1665,6 +1648,8 @@ static SigV4Status_t writeStringToSign( const SigV4Parameters_t * pParams,
         credentialScope.dataLen = sizeNeededForCredentialScope( pParams );
         /* Concatenate credential scope. */
         ( void ) generateCredentialScope( pParams, &credentialScope );
+        /* Concatenate linefeed character. */
+        *pCanonicalContext->pBufCur = LINEFEED_CHAR;
     }
 
     return returnStatus;
@@ -1691,7 +1676,7 @@ static SigV4Status_t generateSigningKey( SigV4Parameters_t * pSigV4Params,
     /* To calculate the final signing key, this function needs at least enough
      * buffer to hold the length of two digests since one digest is used to
      * calculate the other. */
-    if( *pBytesRemaining < pSigV4Params->pCryptoInterface->hashDigestLen * 2 )
+    if( *pBytesRemaining < pSigV4Params->pCryptoInterface->hashDigestLen * 2U )
     {
         returnStatus == SigV4InsufficientMemory;
     }
@@ -1844,12 +1829,41 @@ SigV4Status_t SigV4_GenerateHTTPAuthorization( const SigV4Parameters_t * pParams
 {
     SigV4Status_t returnStatus = SigV4Success;
     CanonicalContext_t canonicalContext;
-    char * pPath = NULL;
-    size_t pathLen = 0U, encodedLen = 0U;
+    char * pPath = NULL, *pAlgorithm = NULL;
+    size_t pathLen = 0U, encodedLen = 0U, algorithmLen = 0U, authPrefixLen = 0U;
     HmacContext_t hmacContext = { 0 };
     SigV4String_t signingKey;
 
     /*returnStatus = verifySigV4Parameters( pParams ); */
+
+    /* Default arguments. */
+    if( ( pParams->pAlgorithm == NULL ) || ( pParams->algorithmLen == 0 ) )
+    {
+        /* The default algorithm is AWS4-HMAC-SHA256. */
+        pAlgorithm = SIGV4_AWS4_HMAC_SHA256;
+        algorithmLen = SIGV4_AWS4_HMAC_SHA256_LENGTH;
+    }
+    else
+    {
+        pAlgorithm = pParams->pAlgorithm;
+        algorithmLen = pParams->algorithmLen;
+    }
+
+    /* Check if the authorization buffer has enough space to hold
+     * the final SigV4 Authorization header value. */
+    authPrefixLen = algorithmLen + SPACE_CHAR_LEN +                                            \
+                    AUTH_CREDENTIAL_PREFIX_LEN + pParams->pCredentials->accessKeyIdLen +           \
+                    CREDENTIAL_SCOPE_SEPARATOR_LEN + sizeNeededForCredentialScope( pParams ) + \
+                    AUTH_SEPARATOR_LEN + AUTH_SIGNED_HEADERS_PREFIX_LEN +                      \
+                    //sizeNeededFor
+                    AUTH_SEPARATOR_LEN + AUTH_SIGNATURE_PREFIX_LEN;
+
+    if( *authBufLen < authPrefixLen + ( pParams->pCryptoInterface->hashDigestLen * 2U ) )
+    {
+        LogError( ( "Insufficient memory provided to write the Authorization header value, bytesExceeded=%zu",
+                    authPrefixLen + ( pParams->pCryptoInterface->hashDigestLen * 2U ) - *authBufLen ) );
+        returnStatus = SigV4InsufficientMemory;
+    }
 
     if( returnStatus == SigV4Success )
     {
@@ -1952,7 +1966,7 @@ SigV4Status_t SigV4_GenerateHTTPAuthorization( const SigV4Parameters_t * pParams
     /* Write string to sign. */
     if( returnStatus == SigV4Success )
     {
-        returnStatus = writeStringToSign( pParams, &canonicalContext );
+        returnStatus = writeStringToSign( pParams, pAlgorithm, algorithmLen, &canonicalContext );
     }
 
     /* Write the signing key. The is done by computing the following function
@@ -1976,7 +1990,7 @@ SigV4Status_t SigV4_GenerateHTTPAuthorization( const SigV4Parameters_t * pParams
                         signingKey.pData,
                         signingKey.dataLen,
                         ( char * ) canonicalContext.pBufProcessing,
-                        ( size_t ) ( canonicalContext.pBufCur - (char *)canonicalContext.pBufProcessing ),
+                        ( size_t ) ( canonicalContext.pBufCur - ( char * ) canonicalContext.pBufProcessing ),
                         canonicalContext.pBufCur,
                         pParams->pCryptoInterface->hashDigestLen,
                         pParams->pCryptoInterface ) != 0 ) )
@@ -1984,23 +1998,60 @@ SigV4Status_t SigV4_GenerateHTTPAuthorization( const SigV4Parameters_t * pParams
         returnStatus = SigV4HashError;
     }
 
-    /* Hex-encode the final signature to the start of the buffer. */
+    /* Write the prefix of the Authorizaton header value. */
+    if( returnStatus == SigV4Success )
+    {
+        SigV4String_t credentialScope;
+        size_t authBufConsumed = 0U;
+
+        /* Write <algorithm> */
+        (void) memcpy(pAuthBuf, pAlgorithm, algorithmLen);
+        pAuthBuf += algorithmLen;
+        *pAuthBuf = SPACE_CHAR;
+        pAuthBuf += SPACE_CHAR_LEN;
+
+        /* Write "Credential=<access key ID>/<credential scope>, " */
+        (void) memcpy(pAuthBuf, AUTH_CREDENTIAL_PREFIX, AUTH_CREDENTIAL_PREFIX_LEN);
+        pAuthBuf += AUTH_CREDENTIAL_PREFIX_LEN;
+        (void) memcpy(pAuthBuf,
+        pParams->pCredentials->pAccessKeyId,
+        pParams->pCredentials->accessKeyIdLen);
+        pAuthBuf += pParams->pCredentials->accessKeyIdLen;
+        *pAuthBuf = CREDENTIAL_SCOPE_SEPARATOR;
+        pAuthBuf += CREDENTIAL_SCOPE_SEPARATOR_LEN;
+        credentialScope.pData = pAuthBuf;
+        credentialScope.dataLen = authBufLen;
+        (void) generateCredentialScope(pParams, &credentialScope);
+        pAuthBuf += credentialScope.dataLen;
+        (void) memcpy(pAuthBuf, AUTH_SEPARATOR, AUTH_SEPARATOR_LEN);
+        pAuthBuf += AUTH_SEPARATOR_LEN;
+        /* Write "SignedHeaders=<signedHeaders>, " */
+        (void) memcpy(pAuthBuf, AUTH_SIGNED_HEADERS_PREFIX, AUTH_SIGNED_HEADERS_PREFIX_LEN);
+        pAuthBuf += AUTH_SIGNED_HEADERS_PREFIX_LEN;
+        /*
+        (void) memcpy(pAuthBuf, AUTH_SIGNED_HEADERS_PREFIX, AUTH_SIGNED_HEADERS_PREFIX_LEN);
+        pAuthBuf += AUTH_SIGNED_HEADERS_PREFIX_LEN;
+        */
+        (void) memcpy(pAuthBuf, AUTH_SEPARATOR, AUTH_SEPARATOR_LEN);
+        pAuthBuf += AUTH_SEPARATOR_LEN;
+        /* Write "Signature=<signature>" */
+        (void) memcpy(pAuthBuf, AUTH_SIGNATURE_PREFIX, AUTH_SIGNATURE_PREFIX_LEN);
+    }
+
+    /* Hex-encode the final signature beforehand to its precalculated
+     * location in the buffer provided for the Authorizaton header value. */
     if( returnStatus == SigV4Success )
     {
         SigV4String_t originalHmac;
         SigV4String_t hexEncodedHmac;
         originalHmac.pData = canonicalContext.pBufCur;
         originalHmac.dataLen = pParams->pCryptoInterface->hashDigestLen;
-        hexEncodedHmac.pData = ( char * ) canonicalContext.pBufProcessing;
-        hexEncodedHmac.dataLen = 64;
+        hexEncodedHmac.pData = pAuthBuf;
+        hexEncodedHmac.dataLen = authBufLen;
         returnStatus = lowercaseHexEncode( &originalHmac,
                                            &hexEncodedHmac );
-    }
-
-    if( returnStatus == SigV4Success )
-    {
-        printf( "Return status is %d\n", returnStatus );
-        printf( "Canonical query is %.*s\n", 64, hexEncodedHmac.pData );
+        *pSignature = hexEncodedHmac.pData;
+        *signatureLen = hexEncodedHmac.dataLen;
     }
 
     return returnStatus;
