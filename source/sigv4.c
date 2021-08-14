@@ -2436,17 +2436,10 @@ static int32_t completeHmac( HmacContext_t * pHmacContext,
 {
     int32_t returnStatus = 0;
 
-    if( outputLen < pCryptoInterface->hashDigestLen )
-    {
-        LogError( ( "Not enough buffer to write the hash digest, bytesExceeded=%lu",
-                    ( unsigned long ) ( pCryptoInterface->hashDigestLen - outputLen ) ) );
-        returnStatus = -1;
-    }
+    assert( pCryptoInterface != NULL );
+    assert( pCryptoInterface->hashDigestLen <= outputLen );
 
-    if( returnStatus == 0 )
-    {
-        returnStatus = hmacKey( pHmacContext, pKey, keyLen );
-    }
+    returnStatus = hmacKey( pHmacContext, pKey, keyLen );
 
     if( returnStatus == 0 )
     {
@@ -2777,7 +2770,7 @@ static SigV4Status_t generateSigningKey( const SigV4Parameters_t * pSigV4Params,
                                        ( pSigV4Params->pCryptoInterface->hashDigestLen * 2U ) - *pBytesRemaining );
     }
 
-    if( hmacStatus == 0 )
+    if( ( returnStatus == SigV4Success ) && ( hmacStatus == 0 ) )
     {
         hmacStatus = completeHmac( pHmacContext,
                                    pSigV4Params->pCredentials->pSecretAccessKey,
@@ -2790,7 +2783,7 @@ static SigV4Status_t generateSigningKey( const SigV4Parameters_t * pSigV4Params,
         *pBytesRemaining -= pSigV4Params->pCryptoInterface->hashDigestLen;
     }
 
-    if( hmacStatus == 0 )
+    if( ( returnStatus == SigV4Success ) && ( hmacStatus == 0 ) )
     {
         pSigningKeyStart = pSigningKey->pData + pSigV4Params->pCryptoInterface->hashDigestLen + 1U;
         hmacStatus = completeHmac( pHmacContext,
@@ -2804,7 +2797,7 @@ static SigV4Status_t generateSigningKey( const SigV4Parameters_t * pSigV4Params,
         *pBytesRemaining -= pSigV4Params->pCryptoInterface->hashDigestLen;
     }
 
-    if( hmacStatus == 0 )
+    if( ( returnStatus == SigV4Success ) && ( hmacStatus == 0 ) )
     {
         hmacStatus = completeHmac( pHmacContext,
                                    pSigningKeyStart,
@@ -2816,7 +2809,7 @@ static SigV4Status_t generateSigningKey( const SigV4Parameters_t * pSigV4Params,
                                    pSigV4Params->pCryptoInterface );
     }
 
-    if( hmacStatus == 0 )
+    if( ( returnStatus == SigV4Success ) && ( hmacStatus == 0 ) )
     {
         hmacStatus = completeHmac( pHmacContext,
                                    pSigningKey->pData,
@@ -2828,14 +2821,17 @@ static SigV4Status_t generateSigningKey( const SigV4Parameters_t * pSigV4Params,
                                    pSigV4Params->pCryptoInterface );
     }
 
-    if( hmacStatus == 0 )
+    if( returnStatus == SigV4Success )
     {
-        pSigningKey->pData = pSigningKeyStart;
-        pSigningKey->dataLen = pSigV4Params->pCryptoInterface->hashDigestLen;
-    }
-    else
-    {
-        returnStatus = SigV4HashError;
+        if( hmacStatus == 0 )
+        {
+            pSigningKey->pData = pSigningKeyStart;
+            pSigningKey->dataLen = pSigV4Params->pCryptoInterface->hashDigestLen;
+        }
+        else
+        {
+            returnStatus = SigV4HashError;
+        }
     }
 
     return returnStatus;
@@ -2941,6 +2937,14 @@ SigV4Status_t SigV4_GenerateHTTPAuthorization( const SigV4Parameters_t * pParams
             returnStatus = SigV4InvalidParameter;
         }
         else if( authBufLen == NULL )
+        {
+            returnStatus = SigV4InvalidParameter;
+        }
+        else if( pSignature == NULL )
+        {
+            returnStatus = SigV4InvalidParameter;
+        }
+        else if( signatureLen == NULL )
         {
             returnStatus = SigV4InvalidParameter;
         }
