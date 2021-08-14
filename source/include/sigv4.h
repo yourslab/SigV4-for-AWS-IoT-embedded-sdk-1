@@ -407,14 +407,12 @@ typedef struct SigV4Parameters
      */
     SigV4HttpParameters_t * pHttpParameters;
 
-    #ifndef SIGV4_SUPPLY_PROCESSING_BUFFER
-
-        /**
-         * @brief The application-provided processing buffer.
-         */
-        uint8_t * pBufProcessing;
-        size_t bufProcessingLen; /**< @brief Length of pBufProcessing. */
-    #endif
+    /**
+     * @brief The application-provided processing buffer.
+     * @note Does not need to be set if #SIGV4_SUPPLY_PROCESSING_BUFFER is set.
+     */
+    uint8_t * pBufProcessing;
+    size_t bufProcessingLen; /**< @brief Length of pBufProcessing. */
 } SigV4Parameters_t;
 
 /**
