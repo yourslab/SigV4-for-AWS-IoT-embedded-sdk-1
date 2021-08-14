@@ -2067,6 +2067,14 @@ static SigV4Status_t verifySigV4Parameters( const SigV4Parameters_t * pParams )
         LogError( ( "Parameter check failed: pParams->pHttpParameters->pHeaders is NULL." ) );
         returnStatus = SigV4InvalidParameter;
     }
+
+    #ifndef SIGV4_SUPPLY_PROCESSING_BUFFER
+        else if( pParams->pBufProcessing == NULL )
+        {
+            LogError( ( "Parameter check failed: pParams->pBufProcessing is NULL." ) );
+            returnStatus = SigV4InvalidParameter;
+        }
+    #endif
     else
     {
         /* Empty else. */
@@ -2468,14 +2476,19 @@ static SigV4Status_t writeStringToSign( const SigV4Parameters_t * pParams,
         size_t sizeNeededBeforeHash = algorithmLen + 1U +         \
                                       SIGV4_ISO_STRING_LEN + 1U + \
                                       sizeNeededForCredentialScope( pParams ) + 1U;
+        #ifdef SIGV4_SUPPLY_PROCESSING_BUFFER
+            size_t processingBufferLength = SIGV4_PROCESSING_BUFFER_LENGTH;
+        #else
+            size_t processingBufferLength = pParams->bufProcessingLen;
+        #endif
 
         /* Check if there is enough space for the string to sign. */
         if( ( sizeNeededBeforeHash + ( pParams->pCryptoInterface->hashDigestLen * 2U ) ) >
-            SIGV4_PROCESSING_BUFFER_LENGTH )
+            processingBufferLength )
         {
             returnStatus = SigV4InsufficientMemory;
             LOG_INSUFFICIENT_MEMORY_ERROR( "for string to sign",
-                                           sizeNeededBeforeHash + ( pParams->pCryptoInterface->hashDigestLen * 2U ) - SIGV4_PROCESSING_BUFFER_LENGTH );
+                                           sizeNeededBeforeHash + ( pParams->pCryptoInterface->hashDigestLen * 2U ) - processingBufferLength );
         }
         else
         {
@@ -2485,7 +2498,7 @@ static SigV4Status_t writeStringToSign( const SigV4Parameters_t * pParams,
                               pCanonicalContext->pBufCur + 1,
                               encodedLen );
             pCanonicalContext->pBufCur = pBufStart + sizeNeededBeforeHash + encodedLen;
-            pCanonicalContext->bufRemaining = SIGV4_PROCESSING_BUFFER_LENGTH - encodedLen - sizeNeededBeforeHash;
+            pCanonicalContext->bufRemaining = processingBufferLength - encodedLen - sizeNeededBeforeHash;
         }
     }
 
@@ -2533,8 +2546,13 @@ static SigV4Status_t generateCanonicalRequestUntilHeaders( const SigV4Parameters
         pathLen = pParams->pHttpParameters->pathLen;
     }
 
-    pCanonicalContext->pBufCur = ( char * ) pCanonicalContext->pBufProcessing;
-    pCanonicalContext->bufRemaining = SIGV4_PROCESSING_BUFFER_LENGTH;
+    #ifdef SIGV4_SUPPLY_PROCESSING_BUFFER
+        pCanonicalContext->pBufCur = ( char * ) pCanonicalContext->pBufProcessing;
+        pCanonicalContext->bufRemaining = SIGV4_PROCESSING_BUFFER_LENGTH;
+    #else
+        pCanonicalContext->pBufCur = ( char * ) pParams->pBufProcessing;
+        pCanonicalContext->bufRemaining = pParams->bufProcessingLen;
+    #endif
 
     /* Write the HTTP Request Method to the canonical request. */
     returnStatus = writeLineToCanonicalRequest( pParams->pHttpParameters->pHttpMethod,

@@ -36,11 +36,13 @@
 #define SIGV4_CONFIG_DEFAULTS_H_
 
 /**
- * @brief Macro defining whether the processing buffer should be passed by
- * the application.
+ * @brief When this macro, the library will supply the processing buffer used
+ * for incremental canonicalization and hashing.
+ * @note When undefined this, the application must supply pBufProcessing and
+ * bufProcessingLength in SigV4Parameters_t.
  */
 #ifndef SIGV4_SUPPLY_PROCESSING_BUFFER
-    #define SIGV4_SUPPLY_PROCESSING_BUFFER  1
+    #define SIGV4_SUPPLY_PROCESSING_BUFFER    1
 #endif
 
 /**
