@@ -2458,7 +2458,11 @@ static SigV4Status_t writeStringToSign( const SigV4Parameters_t * pParams,
 {
     SigV4Status_t returnStatus = SigV4Success;
     size_t encodedLen = pCanonicalContext->bufRemaining;
-    char * pBufStart = ( char * ) pCanonicalContext->pBufProcessing;
+    #ifdef SIGV4_SUPPLY_PROCESSING_BUFFER
+        char * pBufStart = ( char * ) pCanonicalContext->pBufProcessing;
+    #else
+        char * pBufStart = ( char * ) pParams->pBufProcessing;
+    #endif
     ptrdiff_t bufferLen = pCanonicalContext->pBufCur - pBufStart;
 
     assert( pParams != NULL );
