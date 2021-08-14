@@ -1273,7 +1273,6 @@ static SigV4Status_t generateCredentialScope( const SigV4Parameters_t * pSigV4Pa
         assert( pUri != NULL );
         assert( pCanonicalURI != NULL );
         assert( canonicalURILen != NULL );
-        assert( *canonicalURILen > 0U );
 
         pUriLoc = pUri;
         pBufLoc = pCanonicalURI;
@@ -1694,6 +1693,8 @@ static SigV4Status_t generateCredentialScope( const SigV4Parameters_t * pSigV4Pa
         assert( pHeaders != NULL );
         assert( canonicalRequest != NULL );
         assert( canonicalRequest->pBufCur != NULL );
+        assert( pSignedHeaders != NULL );
+        assert( pSignedHeadersLen != NULL );
 
         /* Parsing header string to extract key and value. */
         sigV4Status = parseHeaderKeyValueEntries( pHeaders,
@@ -1980,7 +1981,10 @@ static SigV4Status_t generateCredentialScope( const SigV4Parameters_t * pSigV4Pa
         assert( pCanonicalContext != NULL );
         assert( pCanonicalContext->pBufCur != NULL );
 
-        returnStatus = setQueryStringFieldsAndValues( pQuery, queryLen, &numberOfParameters, pCanonicalContext );
+        if( pQuery != NULL )
+        {
+            returnStatus = setQueryStringFieldsAndValues( pQuery, queryLen, &numberOfParameters, pCanonicalContext );
+        }
 
         if( returnStatus == SigV4Success )
         {
@@ -2067,6 +2071,21 @@ static SigV4Status_t verifySigV4Parameters( const SigV4Parameters_t * pParams )
         LogError( ( "Parameter check failed: pParams->pCryptoInterface is NULL." ) );
         returnStatus = SigV4InvalidParameter;
     }
+    else if( pParams->pCryptoInterface->hashInit == NULL )
+    {
+        LogError( ( "Parameter check failed: pParams->pCryptoInterface->hashInit is NULL." ) );
+        returnStatus = SigV4InvalidParameter;
+    }
+    else if( pParams->pCryptoInterface->hashUpdate == NULL )
+    {
+        LogError( ( "Parameter check failed: pParams->pCryptoInterface->hashUpdate is NULL." ) );
+        returnStatus = SigV4InvalidParameter;
+    }
+    else if( pParams->pCryptoInterface->hashFinal == NULL )
+    {
+        LogError( ( "Parameter check failed: pParams->pCryptoInterface->hashFinal is NULL." ) );
+        returnStatus = SigV4InvalidParameter;
+    }
     else if( pParams->pCryptoInterface->pHashContext == NULL )
     {
         LogError( ( "Parameter check failed: pParams->pCryptoInterface->pHashContext is NULL." ) );
@@ -2098,10 +2117,6 @@ static SigV4Status_t verifySigV4Parameters( const SigV4Parameters_t * pParams )
     {
         LogError( ( "Parameter check failed: pParams->pHttpParameters->pHeaders is NULL." ) );
         returnStatus = SigV4InvalidParameter;
-    }
-    else
-    {
-        /* Empty else. */
     }
 
     return returnStatus;
@@ -2385,7 +2400,7 @@ static SigV4Status_t writeLineToCanonicalRequest( const char * pLine,
 {
     SigV4Status_t returnStatus = SigV4Success;
 
-    assert( ( pLine != NULL ) && ( lineLen > 0 ) );
+    assert( pLine != NULL );
     assert( ( pCanonicalContext != NULL ) && ( pCanonicalContext->pBufCur != NULL ) );
 
     if( pCanonicalContext->bufRemaining < ( lineLen + 1U ) )
@@ -2602,7 +2617,8 @@ static SigV4Status_t generateCanonicalRequestUntilHeaders( const SigV4Parameters
     if( returnStatus == SigV4Success )
     {
         /* Write the query to the canonical request. */
-        if( FLAG_IS_SET( pParams->pHttpParameters->flags, SIGV4_HTTP_QUERY_IS_CANONICAL_FLAG ) )
+        if( FLAG_IS_SET( pParams->pHttpParameters->flags, SIGV4_HTTP_QUERY_IS_CANONICAL_FLAG ) &&
+            ( pParams->pHttpParameters->pQuery != NULL ) )
         {
             /* HTTP query is already canonicalized, so just write it to the buffer as is. */
             returnStatus = writeLineToCanonicalRequest( pParams->pHttpParameters->pQuery,
@@ -2660,7 +2676,7 @@ static SigV4Status_t generateAuthorizationValuePrefix( const SigV4Parameters_t *
     assert( pSignedHeaders != NULL );
     assert( signedHeadersLen > 0 );
     assert( pAuthBuf != NULL );
-    assert( ( pAuthPrefixLen != NULL ) && ( *pAuthPrefixLen > 0 ) );
+    assert( pAuthPrefixLen != NULL );
 
     /* Since the signed headers are required to be a part of final Authorization header value,
      * we copy the signed headers onto the auth buffer before continuing to generate the signature
@@ -2918,19 +2934,34 @@ SigV4Status_t SigV4_GenerateHTTPAuthorization( const SigV4Parameters_t * pParams
 
     returnStatus = verifySigV4Parameters( pParams );
 
-    authPrefixLen = *authBufLen;
-
-    /* Default arguments. */
-    if( ( pParams->pAlgorithm == NULL ) || ( pParams->algorithmLen == 0U ) )
+    if( returnStatus == SigV4Success )
     {
-        /* The default algorithm is AWS4-HMAC-SHA256. */
-        pAlgorithm = SIGV4_AWS4_HMAC_SHA256;
-        algorithmLen = SIGV4_AWS4_HMAC_SHA256_LENGTH;
+        if( pAuthBuf == NULL )
+        {
+            returnStatus = SigV4InvalidParameter;
+        }
+        else if( authBufLen == NULL )
+        {
+            returnStatus = SigV4InvalidParameter;
+        }
     }
-    else
+
+    if( returnStatus == SigV4Success )
     {
-        pAlgorithm = pParams->pAlgorithm;
-        algorithmLen = pParams->algorithmLen;
+        authPrefixLen = *authBufLen;
+
+        /* Default arguments. */
+        if( ( pParams->pAlgorithm == NULL ) || ( pParams->algorithmLen == 0 ) )
+        {
+            /* The default algorithm is AWS4-HMAC-SHA256. */
+            pAlgorithm = SIGV4_AWS4_HMAC_SHA256;
+            algorithmLen = SIGV4_AWS4_HMAC_SHA256_LENGTH;
+        }
+        else
+        {
+            pAlgorithm = pParams->pAlgorithm;
+            algorithmLen = pParams->algorithmLen;
+        }
     }
 
     if( returnStatus == SigV4Success )
