@@ -41,11 +41,17 @@ void harness()
     char ** pSignature;
     size_t * signatureLen;
     SigV4Status_t status;
+    uint8_t * pBufProcessing;
+    size_t bufProcessingLength;
 
     pHttpParams = malloc( sizeof( SigV4HttpParameters_t ) );
     pSigV4Params = malloc( sizeof( SigV4Parameters_t ) );
     pCryptoInterface = malloc( sizeof( SigV4CryptoInterface_t ) );
     pCredentials = malloc( sizeof( SigV4Credentials_t ) );
+
+    /* Processing buffer. Coverage is easier when this is of variable length. */
+    __CPROVER_assume( bufProcessingLength < 20 );
+    pBufProcessing = malloc( bufProcessingLength );
 
     /* This property applies to all hash functions. */
     if( pCryptoInterface != NULL )
@@ -98,6 +104,9 @@ void harness()
         pSigV4Params->pCredentials = pCredentials;
         pSigV4Params->pCryptoInterface = pCryptoInterface;
         pSigV4Params->pHttpParameters = pHttpParams;
+
+        pSigV4Params->pBufProcessing = pBufProcessing;
+        pSigV4Params->bufProcessingLen = bufProcessingLength;
     }
 
     authBufLen = malloc( sizeof( size_t ) );
@@ -113,5 +122,5 @@ void harness()
     }
 
     status = SigV4_GenerateHTTPAuthorization( pSigV4Params, pAuthBuf, authBufLen, pSignature, signatureLen );
-    __CPROVER_assert( status == SigV4InvalidParameter || status == SigV4Success || status == SigV4ISOFormattingError, "This is not a valid SigV4 return status" );
+    __CPROVER_assert( status == SigV4InvalidParameter || status == SigV4Success || status == SigV4HashError || status == SigV4InsufficientMemory || status == SigV4MaxHeaderPairCountExceeded || status == SigV4MaxQueryPairCountExceeded, "This is not a valid SigV4 return status" );
 }
