@@ -182,7 +182,9 @@ typedef struct CanonicalContext
     SigV4KeyValuePair_t pQueryLoc[ SIGV4_MAX_QUERY_PAIR_COUNT ];    /**< Query pointers used during sorting. */
     SigV4KeyValuePair_t pHeadersLoc[ SIGV4_MAX_HTTP_HEADER_COUNT ]; /**< Header pointers used during sorting. */
 
-    uint8_t pBufProcessing[ SIGV4_PROCESSING_BUFFER_LENGTH ];       /**< Internal calculation buffer used during canonicalization. */
+    #ifdef SIGV4_SUPPLY_PROCESSING_BUFFER
+        uint8_t pBufProcessing[ SIGV4_PROCESSING_BUFFER_LENGTH ];       /**< Internal calculation buffer used during canonicalization. */
+    #endif
     char * pBufCur;                                                 /**< pBufProcessing cursor. */
     size_t bufRemaining;                                            /**< pBufProcessing value used during internal calculation. */
 } CanonicalContext_t;

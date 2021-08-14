@@ -36,6 +36,14 @@
 #define SIGV4_CONFIG_DEFAULTS_H_
 
 /**
+ * @brief Macro defining whether the processing buffer should be passed by
+ * the application.
+ */
+#ifndef SIGV4_SUPPLY_PROCESSING_BUFFER
+    #define SIGV4_SUPPLY_PROCESSING_BUFFER  1
+#endif
+
+/**
  * @brief Macro defining the size of the internal buffer used for incremental
  * canonicalization and hashing.
  *

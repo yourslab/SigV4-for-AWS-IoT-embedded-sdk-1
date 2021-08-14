@@ -406,6 +406,14 @@ typedef struct SigV4Parameters
      * @brief HTTP specific SigV4 parameters for canonical request calculation.
      */
     SigV4HttpParameters_t * pHttpParameters;
+
+    #ifndef SIGV4_SUPPLY_PROCESSING_BUFFER
+        /**
+         * @brief The application-provided processing buffer.
+         */
+        uint8_t* pBufProcessing;
+        size_t bufProcessingLen; /**< @brief Length of pBufProcessing. */
+    #endif
 } SigV4Parameters_t;
 
 /**
